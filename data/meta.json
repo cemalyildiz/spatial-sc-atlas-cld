@@ -1,29 +1,29 @@
 {
-  "generated": "2026-09-16 07:40 UTC",
-  "total": 4707,
-  "paired_via_siblings": 97,
-  "records_with_siblings": 1429,
+  "generated": "2026-09-28 10:55 UTC",
+  "total": 4752,
+  "paired_via_siblings": 98,
+  "records_with_siblings": 1438,
   "by_modality": {
-    "singlecell": 2411,
-    "spatial": 1418,
-    "paired": 878
+    "singlecell": 2429,
+    "spatial": 1436,
+    "paired": 887
   },
   "by_platform_class": {
-    "sequencing": 4382,
-    "imaging": 325
+    "sequencing": 4420,
+    "imaging": 332
   },
   "by_disease_group": {
-    "Cancer": 3320,
-    "Other disease": 827,
-    "Unspecified": 560
+    "Cancer": 3349,
+    "Other disease": 838,
+    "Unspecified": 565
   },
   "by_database": {
-    "GEO": 4536,
-    "ArrayExpress": 171
+    "GEO": 4580,
+    "ArrayExpress": 172
   },
   "by_year": {
+    "2026": 1137,
     "2025": 1094,
-    "2026": 1092,
     "2024": 808,
     "2023": 593,
     "2022": 417,
@@ -42,5 +42,5 @@
     "NCBI GEO (E-utilities esearch/esummary, db=gds)",
     "EBI ArrayExpress (BioStudies search API)"
   ],
-  "new_since_last_run": 6
+  "new_since_last_run": 45
 }
