@@ -90,7 +90,18 @@ jobs:
           git checkout -B "$BRANCH"
           git add data/
           git commit -m "Refresh catalog: ${{ steps.summary.outputs.total }} datasets (${{ steps.summary.outputs.new }} new)"
-          git push --force-with-lease origin "$BRANCH"
+
+          # actions/checkout fetches only the branch it checks out, so there is no
+          # origin/<BRANCH> tracking ref for a refresh branch and a bare
+          # --force-with-lease has nothing to lease against - git rejects the push
+          # as "stale info". Read the remote tip with ls-remote instead and lease
+          # against exactly that, so a concurrent write still can't be clobbered.
+          REMOTE_SHA="$(git ls-remote --heads origin "$BRANCH" | cut -f1)"
+          if [ -n "$REMOTE_SHA" ]; then
+            git push --force-with-lease="$BRANCH:$REMOTE_SHA" origin "HEAD:refs/heads/$BRANCH"
+          else
+            git push origin "HEAD:refs/heads/$BRANCH"
+          fi
 
           {
             printf 'Automated harvest from NCBI GEO and EBI ArrayExpress.\n\n'
@@ -99,9 +110,27 @@ jobs:
             printf 'Accession, title, description, organism, sample count, release date and PubMed ID come verbatim from the source databases. Modality, platform, disease and tissue are derived by the rules in `scripts/harvest.py` - skim the diff for obvious mislabels before merging.\n'
           } > /tmp/pr-body.md
 
-          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq 'length')" = "0" ]; then
-            gh pr create --title "Refresh catalog (${{ steps.summary.outputs.new }} new datasets)" \
-                         --body-file /tmp/pr-body.md --head "$BRANCH" --base "${{ github.event.repository.default_branch }}"
-          else
+          BASE="${{ github.event.repository.default_branch }}"
+          COMPARE="${{ github.server_url }}/${{ github.repository }}/compare/${BASE}...${BRANCH}?expand=1"
+
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq 'length')" != "0" ]; then
             echo "A pull request for $BRANCH is already open; it now carries the latest harvest."
+          elif gh pr create --title "Refresh catalog (${{ steps.summary.outputs.new }} new datasets)" \
+                            --body-file /tmp/pr-body.md --head "$BRANCH" --base "$BASE"; then
+            echo "Pull request opened for $BRANCH."
+          else
+            # Creating pull requests from Actions is off by default: Settings ->
+            # Actions -> General -> "Allow GitHub Actions to create and approve pull
+            # requests". The refreshed branch is pushed either way, so hand over the
+            # compare link rather than failing a harvest that actually succeeded.
+            echo "::warning::Could not open a pull request automatically - the refreshed branch $BRANCH is pushed and ready to review."
+            {
+              echo "### Catalog refresh ready for review"
+              echo ""
+              echo "The harvest succeeded and \`$BRANCH\` is pushed, but a pull request could not be opened automatically."
+              echo ""
+              echo "**[Open the pull request]($COMPARE)**"
+              echo ""
+              echo "To have this happen by itself, enable *Allow GitHub Actions to create and approve pull requests* in Settings -> Actions -> General."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
