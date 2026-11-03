@@ -61,14 +61,20 @@ abbreviation against the existing catalog before adding it bare.
 
 ## How it stays current
 
-`.github/workflows/refresh.yml` re-runs the harvest every Monday and opens a **pull request** when
-the catalog changes, so nothing reaches the site without review.
+`.github/workflows/refresh.yml` re-runs the harvest every Monday at 04:17 UTC and commits the
+refreshed catalog **straight to `main`**, so the site is always current without anyone approving a
+pull request. Nothing is hand-edited in between: `scripts/harvest.py` regenerates `data/` from
+scratch on every run, and refuses to overwrite the catalog if the harvest returns fewer than 200
+records, so a failed or throttled source leaves the previous catalog in place.
 
 ```
 Actions → Refresh catalog → Run workflow
-  mode: pr      open a pull request for review  (default, used by the schedule)
-  mode: direct  commit straight to main         (use for the first build)
+  mode: direct  commit straight to main          (default, used by the schedule)
+  mode: pr      open a pull request for review   (use when changing the classification rules)
 ```
+
+Use `mode: pr` after editing the vocabularies in `scripts/harvest.py`, when the point is to read the
+label diff before it goes live.
 
 Optionally add a repository secret `NCBI_API_KEY`
 ([get one here](https://www.ncbi.nlm.nih.gov/account/settings/)) to raise the NCBI rate limit from

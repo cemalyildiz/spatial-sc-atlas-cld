@@ -199,8 +199,11 @@
 
       <h2>How it stays current</h2>
       <p>
-        A scheduled GitHub Action re-runs the harvest every week, and opens a pull request when the
-        catalog changes, so nothing enters the site without review. The harvest code is
+        A scheduled GitHub Action re-runs the harvest every Monday and commits the refreshed
+        catalog straight to <code>main</code>, so the site tracks the source databases without
+        anyone approving anything. The catalog is regenerated from scratch each run rather than
+        appended to, and the run refuses to overwrite it if a source returns implausibly little, so
+        a throttled database leaves the previous catalog standing. The harvest code is
         <a href="https://github.com/cemalyildiz/spatial-sc-atlas-cld/blob/main/scripts/harvest.py" target="_blank" rel="noopener">scripts/harvest.py</a>
         — the classification vocabularies live at the top of that file and are meant to be edited.
       </p>
