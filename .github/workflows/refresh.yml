@@ -9,11 +9,11 @@ on:
       mode:
         description: "How to deliver the refreshed catalog"
         required: true
-        default: pr
+        default: direct
         type: choice
         options:
-          - pr      # open a pull request for review (default, and what the schedule uses)
-          - direct  # commit straight to the default branch
+          - direct  # commit straight to the default branch (default, and what the schedule uses)
+          - pr      # open a pull request for review instead
 
 permissions:
   contents: write
@@ -71,16 +71,34 @@ jobs:
           fi
 
       - name: Commit directly
-        if: steps.diff.outputs.changed == 'true' && inputs.mode == 'direct'
+        if: steps.diff.outputs.changed == 'true' && inputs.mode != 'pr'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/
           git commit -m "Refresh catalog: ${{ steps.summary.outputs.total }} datasets (${{ steps.summary.outputs.new }} new)"
-          git push
+
+          # If a human commit landed on the default branch while the harvest was
+          # running, the first push is rejected. data/ is regenerated from scratch
+          # on every run, so replaying this commit on top of their work is safe -
+          # the result is never a partial merge of two catalogs.
+          BASE="${{ github.event.repository.default_branch }}"
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:refs/heads/$BASE"; then
+              echo "Pushed to $BASE on attempt $attempt."
+              exit 0
+            fi
+            echo "Push rejected; replaying the harvest commit onto origin/$BASE."
+            git fetch origin "$BASE"
+            git reset --mixed "origin/$BASE"   # keeps the harvested files, drops the commit
+            git add data/
+            git commit -m "Refresh catalog: ${{ steps.summary.outputs.total }} datasets (${{ steps.summary.outputs.new }} new)"
+          done
+          echo "::error::Could not push the refreshed catalog to $BASE after 3 attempts."
+          exit 1
 
       - name: Open pull request
-        if: steps.diff.outputs.changed == 'true' && inputs.mode != 'direct'
+        if: steps.diff.outputs.changed == 'true' && inputs.mode == 'pr'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
