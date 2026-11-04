@@ -36,7 +36,7 @@
     singlecell: 'Single-cell only'
   };
   var MODALITY_SHORT = { paired: 'Paired', spatial: 'Spatial', singlecell: 'Single-cell' };
-  var CLASS_LABEL = { imaging: 'Imaging-based', sequencing: 'Sequencing-based' };
+  var CLASS_LABEL = { imaging: 'Imaging-based', sequencing: 'Sequencing-based', unspecified: 'Not stated' };
 
   var GROUPS = [
     { key: 'modality',       title: 'Modality',           open: true,  label: function (v) { return MODALITY_LABEL[v] || v; } },
@@ -173,18 +173,23 @@
     return counts;
   }
 
+  // GEO wrote dates as YYYY/MM/DD and ArrayExpress as YYYY-MM-DD; compare one form
+  // so an older catalog still sorts correctly.
+  function iso(d) { return (d || '').replace(/\//g, '-'); }
+
   var SORTERS = {
     relevance: function (a, b) {
       var rank = { paired: 0, spatial: 1, singlecell: 2 };
       var d = rank[a.modality] - rank[b.modality];
       if (d) return d;
-      return (b.date || '').localeCompare(a.date || '');
+      return iso(b.date) < iso(a.date) ? -1 : iso(b.date) > iso(a.date) ? 1 : 0;
     },
-    newest: function (a, b) { return (b.date || '').localeCompare(a.date || ''); },
-    oldest: function (a, b) { return (a.date || '').localeCompare(b.date || ''); },
+    newest: function (a, b) { return iso(b.date) < iso(a.date) ? -1 : iso(b.date) > iso(a.date) ? 1 : 0; },
+    oldest: function (a, b) { return iso(a.date) < iso(b.date) ? -1 : iso(a.date) > iso(b.date) ? 1 : 0; },
     cells: function (a, b) { return (b.cells || 0) - (a.cells || 0); },
     samples: function (a, b) { return (b.samples || 0) - (a.samples || 0); },
-    accession: function (a, b) { return a.accession.localeCompare(b.accession); }
+    // numeric-aware, so GSE99795 comes before GSE100000
+    accession: function (a, b) { return a.accession.localeCompare(b.accession, 'en', { numeric: true }); }
   };
 
   // --------------------------------------------------------------- render --
@@ -590,7 +595,7 @@
     row('Organism', r.organism);
     row('Samples', r.samples ? nf(r.samples) : null);
     row('Cells reported', r.cells ? nf(r.cells) : null);
-    row('Released', r.date || r.year);
+    row('Released', iso(r.date) || r.year);
     row('Access', r.access);
     row('Source', r.db);
     body.appendChild(dl);
@@ -685,7 +690,7 @@
       ['Organism', function (r) { return r.organism; }],
       ['Samples', function (r) { return r.samples ? nf(r.samples) : '—'; }],
       ['Cells', function (r) { return r.cells ? nf(r.cells) : '—'; }],
-      ['Released', function (r) { return r.date || r.year || '—'; }],
+      ['Released', function (r) { return iso(r.date) || r.year || '—'; }],
       ['Source', function (r) { return r.db; }]
     ];
 
@@ -951,7 +956,8 @@
 
   function exportCsv() {
     var cols = ['accession', 'db', 'title', 'modality', 'platform', 'platform_class',
-                'sc_platform', 'pairing', 'siblings', 'disease', 'disease_group', 'subtypes', 'tissue', 'organism',
+                'sc_platform', 'pairing', 'siblings', 'disease', 'disease_group', 'subtypes', 'study_type',
+                'tissue', 'organism',
                 'samples', 'cells', 'year', 'date', 'pmid', 'access', 'url'];
     var lines = [cols.join(',')];
     lastFiltered.forEach(function (r) {
@@ -1025,7 +1031,8 @@
     });
     document.addEventListener('keydown', function (ev) {
       if (ev.key === 'Escape') $('#overlay').hidden = true;
-      if (ev.key === '/' && document.activeElement !== $('#search')) {
+      var tag = (document.activeElement && document.activeElement.tagName) || '';
+      if (ev.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(tag)) {
         ev.preventDefault();
         $('#search').focus();
       }
