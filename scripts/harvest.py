@@ -295,7 +295,10 @@ CANCER = _c(
                   r"|adenocarcinoma of (the )?lungs?|pulmonary adenocarcinoma|\blcnec\b|bronchioloalveolar"
                   r"|lepidic|adenosquamous carcinoma of (the )?lung|large[- ]cell carcinoma of (the )?lung"),
         ("SCLC", r"small[- ]cell lung cancer|\bsclc\b"),
-        ("Lung cancer (other)", r"lung (cancer|tumou?r|carcinoma|metasta|neoplas)|pulmonary (cancer|carcinoma)|mesothelioma"),
+        # Mesothelioma is a pleural/peritoneal cancer, not a lung cancer; it used to
+        # fall into "Lung cancer (other)" and from there into lung searches.
+        ("Mesothelioma", r"mesothelioma"),
+        ("Lung cancer (other)", r"lung (cancer|tumou?r|carcinoma|metasta|neoplas)|pulmonary (cancer|carcinoma)"),
         ("Breast cancer", r"breast (cancer|tumou?r|carcinoma)|triple[- ]negative breast|\btnbc\b"
                           r"|ductal carcinoma in situ|\bdcis\b|invasive (ductal|lobular) carcinoma"
                           r"|luminal [ab] (breast|subtype)"),
@@ -350,7 +353,7 @@ HEALTHY = re.compile(
 
 TISSUE = _c(
     [
-        ("Lung", r"\blungs?\b|pulmonary|bronch|alveol|\bairway"),
+        ("Lung", r"\blungs?\b|pulmonary|bronch|alveol|\bairway|\bnsclc\b|\bsclc\b|\bluad\b|\blusc\b"),
         ("Brain / CNS", r"\bbrain\b|cortex|cortical|hippocamp|cerebell|\bneuron|\bcns\b|spinal cord|striatum|\bglia"),
         ("Breast", r"\bbreast\b|mammary"),
         ("Colon / intestine", r"\bcolon\b|colorect|intestin|\bileum\b|\brectal\b|duoden|\bcolitis\b"),
@@ -387,6 +390,46 @@ DISEASE_NOISE = re.compile(
     r"tumou?r necrosis|anti-?tnf",
     re.I,
 )
+
+# A study whose TITLE says it spans many cancer types is pan-cancer, even when
+# its abstract names lung adenocarcinoma first (KCNQ3 pan-cancer analysis,
+# the 30-cancer-type tumour/normal atlas). Title only: abstracts mention
+# "multiple cancer types" in passing far too often to be trusted.
+PAN_CANCER_TITLE = re.compile(
+    r"pan-?cancer|\b(\d+|multiple|several|diverse|various|twenty|thirty)\s+(different\s+)?(human\s+)?"
+    r"(cancer|tumou?r) types|across (\w+\s+){0,3}(cancer|tumou?r) types|thousand tumou?rs",
+    re.I,
+)
+
+# Method / tool development studies. Their data are usually a demonstration
+# set (NEST, DGAT ...), so they are labelled rather than dropped, and the site
+# can hide them. Title "ACRONYM: ... <tool word>" or "Benchmarking ...", or an
+# abstract that says "we develop/present a <computational> method/tool/...".
+_TOOL_WORDS = (
+    r"(network|method|framework|tool|toolkit|algorithm|pipeline|learning|inferr?\w*|predict\w*"
+    r"|deconvol\w*|benchmark\w*|computational|software|package|embedding|transformer|graph"
+    r"|imputation|integration of)"
+)
+METHOD_TITLE = re.compile(
+    r"^\s*[A-Za-z][\w\-\.\+]{1,24}\s*:\s.*\b" + _TOOL_WORDS
+    + r"|^\s*(benchmark\w*|a (computational|deep[- ]learning|statistical) (method|framework|approach))",
+    re.I,
+)
+METHOD_BODY = re.compile(
+    r"\bwe (develop|developed|present|introduce|propose|proposed|describe|built|build)\w*\s+(a |an )?"
+    r"(new |novel |general |scalable |unified |open[- ]source )*"
+    r"(computational |statistical |deep[- ]learning |machine[- ]learning |graph[- ]based |bayesian "
+    r"|probabilistic |ai[- ]driven |generative )*"
+    r"(method|tool|toolkit|framework|algorithm|pipeline|software|package)\b",
+    re.I,
+)
+
+
+def study_type(title, body):
+    if METHOD_TITLE.search(title or "") or METHOD_BODY.search(body or ""):
+        return "Method / tool development"
+    return "Biological study"
+
 
 CELLS_RE = re.compile(
     r"([\d]{1,3}(?:[,\.]\d{3})+|\d{4,9})\s*(?:single[- ])?(?:cells|nuclei)\b", re.I
@@ -459,6 +502,8 @@ def classify(title, body, extra=""):
     has_sc = bool(SC_RE.search(text))
     disease_text = DISEASE_NOISE.sub(" ", text)
     cancer = first_match(CANCER, disease_text)
+    if cancer and PAN_CANCER_TITLE.search(title or ""):
+        cancer = "Cancer (other / pan-cancer)"
     other = None if cancer else first_match(OTHER_DISEASE, disease_text)
     if not cancer and not other and HEALTHY.search(text):
         other = "Healthy reference atlas"
@@ -475,6 +520,7 @@ def classify(title, body, extra=""):
         "tissue": best_tissue(text),
         "cells": cell_count(text),
         "access": "Controlled" if CONTROLLED_RE.search(text) else "Open",
+        "study_type": study_type(title, body),
     }
 
 
@@ -527,6 +573,54 @@ def group_key(text):
     return t[:300] if len(t) >= 120 else ""
 
 
+# ArrayExpress companion studies do not share an abstract: E-MTAB-13526
+# ("Single cell RNA-seq atlas of human NSCLC lesions and non-involved tissue")
+# and E-MTAB-13530 ("Spatial transcriptomics (10x Visium) of human NSCLC
+# lesions and non-involved tissue") describe their own assay. What they share
+# is the title once the assay words are removed, and accessions a few numbers
+# apart (they are submitted together).
+_AE_ASSAY = re.compile(
+    r"\([^)]*\)|\[[^\]]*\]|single[- ](cell|nucleus|nuclei)|sc-?rna-?seq|sn-?rna-?seq|rna-?seq"
+    r"|spatial(ly)?( resolved)?|transcriptom\w*|visium( hd)?|xenium|cosmx|merfish|geomx|stereo-?seq"
+    r"|slide-?seq|10x( genomics)?|chromium|sequencing|profiling|atlas|dataset|data|analysis"
+    r"|\b(of|the|and|in|from|by|with|a|an|human|mouse|samples?|tissues?)\b|gene expression",
+    re.I,
+)
+AE_TITLE_SIMILARITY = 0.7
+AE_ACCESSION_WINDOW = 200
+
+
+def _ae_title_core(title):
+    words = re.findall(r"[a-z0-9\-]+", _AE_ASSAY.sub(" ", (title or "").lower()))
+    return {w for w in words if len(w) > 1}
+
+
+def _ae_number(acc):
+    m = re.match(r"^E-([A-Z]+)-(\d+)$", acc or "")
+    return (m.group(1), int(m.group(2))) if m else (None, None)
+
+
+def ae_title_links(rows):
+    """Pairs of ArrayExpress accessions that look like halves of one study."""
+    ae = []
+    for r in rows:
+        if r.get("db") != "ArrayExpress":
+            continue
+        prefix, num = _ae_number(r["accession"])
+        core = _ae_title_core(r["title"])
+        if prefix and len(core) >= 3:
+            ae.append((prefix, num, core, r["accession"]))
+    ae.sort()
+    links = []
+    for i, (p1, n1, c1, a1) in enumerate(ae):
+        for p2, n2, c2, a2 in ae[i + 1 :]:
+            if p2 != p1 or n2 - n1 > AE_ACCESSION_WINDOW:
+                break
+            if len(c1 & c2) / len(c1 | c2) >= AE_TITLE_SIMILARITY:
+                links.append((a1, a2))
+    return links
+
+
 def link_siblings(rows):
     """Link subseries of one study and promote pairing to the study level.
 
@@ -535,15 +629,41 @@ def link_siblings(rows):
     the modality is promoted, and `pairing` records whether the pairing comes
     from the record itself or from its siblings, so the site can say which.
     """
-    groups = {}
+    # Union-find over two kinds of evidence: a shared abstract (GEO subseries)
+    # and a matching assay-stripped title (ArrayExpress companion studies).
+    parent = {}
+
+    def find(a):
+        parent.setdefault(a, a)
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    by_key = {}
     for r in rows:
         k = r.pop("_k", "")
         if k:
-            groups.setdefault(k, []).append(r)
+            by_key.setdefault(k, []).append(r["accession"])
+    for accs in by_key.values():
+        if 2 <= len(accs) <= 8:  # a very large group means the key caught boilerplate
+            for a in accs[1:]:
+                union(accs[0], a)
+    for a, b in ae_title_links(rows):
+        union(a, b)
+
+    groups = {}
+    for r in rows:
+        if r["accession"] in parent:
+            groups.setdefault(find(r["accession"]), []).append(r)
 
     promoted = 0
     for members in groups.values():
-        # A very large group means the key caught boilerplate, not one study.
         if not 2 <= len(members) <= 8:
             continue
         accessions = [m["accession"] for m in members]
@@ -608,6 +728,7 @@ def build():
                 "disease": c["disease"],
                 "disease_group": c["disease_group"],
                 "subtypes": c["subtypes"],
+                "study_type": c["study_type"],
                 "tissue": c["tissue"],
                 "organism": organism(r["taxon"]),
                 "samples": r["n"],
@@ -654,6 +775,7 @@ def build():
                 "disease": c["disease"],
                 "disease_group": c["disease_group"],
                 "subtypes": c["subtypes"],
+                "study_type": c["study_type"],
                 "tissue": c["tissue"],
                 "organism": organism(r["taxon"]),
                 "samples": r["n"],
@@ -705,6 +827,7 @@ def build():
                 "disease": c["disease"],
                 "disease_group": c["disease_group"],
                 "subtypes": c["subtypes"],
+                "study_type": c["study_type"],
                 "tissue": c["tissue"],
                 "organism": organism("", text),
                 "samples": 0,
@@ -740,6 +863,7 @@ def summarise(rows):
         "by_modality": tally("modality"),
         "by_platform_class": tally("platform_class"),
         "by_disease_group": tally("disease_group"),
+        "by_study_type": tally("study_type"),
         "by_database": tally("db"),
         "by_year": tally("year"),
         "sources": [
@@ -749,8 +873,65 @@ def summarise(rows):
     }
 
 
+def reclassify(rows):
+    """Apply the newer rules to an existing catalog without re-harvesting.
+
+    The stored description is truncated, so only rules that are safe on
+    title + stored text are re-applied: mesothelioma and pan-cancer disease
+    labels, study type, and ArrayExpress pairing. GEO subseries links need the
+    full abstract, which is not stored, so the links found by the last full
+    harvest are kept. The next full harvest recomputes everything.
+    """
+    by_acc = {r["accession"]: r for r in rows}
+    for r in rows:
+        r["study_type"] = study_type(r["title"], r["description"])
+        text = f"{r['title']} || {r['description']}"
+        if r["disease"] == "Lung cancer (other)" and re.search(r"mesothelioma", text, re.I):
+            r["disease"] = "Mesothelioma"
+        if r["tissue"] == "Other" and r["disease"] in ("NSCLC", "SCLC"):
+            r["tissue"] = "Lung"
+        if r["disease_group"] == "Cancer" and PAN_CANCER_TITLE.search(r["title"]):
+            r["disease"] = "Cancer (other / pan-cancer)"
+        r.setdefault("siblings", [])
+        r.setdefault("pairing", "record" if r["modality"] == "paired" else "")
+
+    # merge ArrayExpress title links into the existing sibling groups
+    promoted = 0
+    for a, b in ae_title_links(rows):
+        group = {a, b} | set(by_acc[a]["siblings"]) | set(by_acc[b]["siblings"])
+        members = [by_acc[x] for x in sorted(group) if x in by_acc]
+        has_spatial = any(m["modality"] in ("spatial", "paired") for m in members)
+        has_sc = any(m["modality"] in ("singlecell", "paired") or m["sc_platform"] for m in members)
+        for m in members:
+            m["siblings"] = [x["accession"] for x in members if x is not m]
+            if has_spatial and has_sc and m["modality"] != "paired":
+                m["modality"] = "paired"
+                m["pairing"] = "series"
+                promoted += 1
+    print(f"reclassify: {promoted} ArrayExpress records promoted to paired", flush=True)
+    return rows
+
+
+def reclassify_main():
+    existing = DATA / "datasets.json"
+    doc = json.loads(existing.read_text())
+    rows = reclassify(doc["datasets"])
+    meta = summarise(rows)
+    meta["new_since_last_run"] = doc.get("meta", {}).get("new_since_last_run", 0)
+    meta["generated"] = doc.get("meta", {}).get("generated", meta["generated"])
+    meta["reclassified"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    existing.write_text(
+        json.dumps({"meta": meta, "datasets": rows}, ensure_ascii=False, separators=(",", ":"))
+    )
+    (DATA / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+    print(f"Reclassified {len(rows)} datasets.")
+    return 0
+
+
 def main():
     DATA.mkdir(parents=True, exist_ok=True)
+    if "--reclassify" in sys.argv:
+        return reclassify_main()
     rows = build()
 
     if len(rows) < 200:
