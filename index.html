@@ -125,8 +125,8 @@
       <table class="fieldtable">
         <thead><tr><th>From the source database, verbatim</th><th>Derived here, automatically</th></tr></thead>
         <tbody><tr>
-          <td>Accession · title · description · release date · PubMed ID · organism and sample count (GEO)</td>
-          <td>Modality · platform · imaging vs sequencing · disease category · subtype · study type · tissue · cell count · organism (ArrayExpress, read from the text)</td>
+          <td>Accession · title · description · release date · PubMed ID · organism · sample count · ArrayExpress study type</td>
+          <td>Modality · platform · imaging vs sequencing · disease category · subtype · study type · tissue · cell count</td>
         </tr></tbody>
       </table>
       <p>
@@ -267,11 +267,28 @@
         The trade-off is coverage against resolution, and it is usually the first thing you need
         to filter on.
       </p>
+      <h2>Where the platform comes from</h2>
       <p>
-        Many spatial records never say which platform they used — they write "spatial
-        transcriptomics" and stop. Those are listed as <em>Spatial (unspecified)</em> with
-        production method <strong>Not stated</strong> instead of being counted as sequencing-based;
-        the source record or the paper usually settles it.
+        A study abstract names every platform the study used, and many name none, so the
+        platform of a spatial record is taken from the strongest evidence available, in this
+        order: the record's own title or <em>[assay]</em> tag; the <strong>file names it
+        deposited</strong> (a <code>tissue_positions.csv</code> or <code>scalefactors_json</code>
+        is Visium, a <code>transcripts.parquet</code> Xenium, a <code>.dcc</code> GeoMx, a
+        <code>.gef</code> Stereo-seq); its processing or protocol text (<em>Space Ranger</em>,
+        <em>AtoMx</em>, <em>Vizgen</em>); and only then the abstract. The detail panel says which
+        one decided under <em>Platform evidence</em>. File names come from the GEO series and
+        sample records and from the BioStudies file list, and are fetched once per accession.
+      </p>
+      <p>
+        When none of these names a platform, or they disagree, the record is listed as
+        <em>Spatial (unspecified)</em> with production method <strong>Not stated</strong> instead
+        of being counted as sequencing-based. For ArrayExpress the study type, organism and sample
+        count curated in BioStudies are used as well: a study typed "RNA-seq of coding RNA from
+        single cells" is single-cell even when its title names the Visium partner study.
+      </p>
+      <p>
+        Cell counts are only known where a record states one, which few do — the
+        <em>Minimum cells</em> filter therefore hides every record without a stated count.
       </p>
 
       <h2>How it stays current</h2>

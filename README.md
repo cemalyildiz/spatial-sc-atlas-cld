@@ -38,7 +38,7 @@ straight into a download script.
 
 | Verbatim from the source database | Derived here, automatically |
 | --- | --- |
-| accession · title · description · organism (GEO) · sample count (GEO) · release date · PubMed ID | modality · platform · imaging vs sequencing · disease category · subtype · study type · tissue · cell count · organism (ArrayExpress) |
+| accession · title · description · organism · sample count · release date · PubMed ID · ArrayExpress study type | modality · platform (and `platform_source`) · imaging vs sequencing · disease category · subtype · study type · tissue · cell count |
 
 Derived fields are pattern-matched from each record's title and description by the vocabularies at
 the top of [`scripts/harvest.py`](scripts/harvest.py). They are good enough to filter and browse
@@ -64,10 +64,16 @@ the bulk companion and is dropped — unless every other part of the study is a 
 (GSE118389 `[RNA-Seq]` beside GSE118303 `[WES]`), where it is the only expression data and stays.
 Groups are formed before anything is dropped, so removing a bulk subseries never splits a study.
 
-The platform named in a record's own tag or title wins over the platforms its abstract lists, so the
-`[Visium]` subseries of a study that also ran Xenium is a Visium record. A spatial record that never
-names its platform is `Spatial (unspecified)` with production method *Not stated* rather than being
-counted as sequencing-based.
+The platform of a spatial record comes from the strongest evidence available: its own tag or title,
+then the **file names it deposited** (`tissue_positions.csv`/`scalefactors_json` → Visium,
+`transcripts.parquet` → Xenium, `.dcc`/`.pkc` → GeoMx, `exprMat_file` → CosMx, `cell_by_gene` →
+MERSCOPE, `.gef` → Stereo-seq, `bead_locations` → Slide-seq, `square_008um` → Visium HD), then its
+processing/protocol text (Space Ranger, AtoMx, Vizgen), and only then the abstract. The record's
+`platform_source` field (shown as *Platform evidence*) says which one decided. File names are read
+from the GEO series and sample records and the BioStudies file list, fetched once per accession and
+cached in `data/enrichment.json`; bump `ENRICH_VERSION` in `harvest.py` after changing the signatures
+to fetch everything again. A record whose evidence names nothing, or conflicting platforms, is
+`Spatial (unspecified)` with production method *Not stated* rather than counted as sequencing-based.
 
 The cancer named in the *title* wins over the first one found in the abstract, except that a title
 saying only "lung cancer" does not override NSCLC/SCLC from the abstract. A title that says it spans
@@ -77,9 +83,11 @@ Organ-specific subtypes are kept only on a matching disease: a breast-cancer stu
 adenocarcinoma does not carry `LUAD`. Molecular labels (EGFR-, KRAS-mutant, HER2-positive, IDH, MSI,
 HPV) occur in several cancers and are kept whatever the disease.
 
-Release dates are ISO (`YYYY-MM-DD`) for both sources. ArrayExpress search results carry no sample
-count or organism field, so for those records the sample count is left blank and the organism is
-read from the text.
+Release dates are ISO (`YYYY-MM-DD`) for both sources. For ArrayExpress, organism, sample count and
+study type come from the BioStudies study record; the study type also settles modality (a study typed
+"RNA-seq of coding RNA from single cells" is single-cell even when its title names its Visium partner),
+and a study typed only as ATAC/ChIP/methylation is left out. Cell counts exist only where a record
+states one, so the *Minimum cells* filter hides every record without a stated count.
 
 Improving a label means editing a regex in `harvest.py` and re-running the harvest — not hand-editing
 `data/datasets.json`, which is regenerated on every run.
@@ -115,6 +123,7 @@ Optionally add a repository secret `NCBI_API_KEY`
 ```bash
 python3 scripts/harvest.py     # stdlib only, no dependencies
 python3 scripts/harvest.py --reclassify   # re-apply label rules to the existing catalog, no network
+python3 scripts/harvest.py --reclassify --fetch   # same, but fetch missing platform evidence first
 python3 -m http.server 8000    # then open http://localhost:8000
 ```
 
