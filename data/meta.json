@@ -1,33 +1,40 @@
 {
-  "generated": "2026-11-03 10:35 UTC",
-  "total": 4556,
-  "paired_via_siblings": 362,
-  "records_with_siblings": 1128,
+  "generated": "2026-11-04 11:55 UTC",
+  "total": 4565,
+  "paired_via_siblings": 364,
+  "records_with_siblings": 1135,
   "by_modality": {
-    "singlecell": 2273,
-    "spatial": 1469,
-    "paired": 814
+    "singlecell": 2276,
+    "spatial": 1473,
+    "paired": 816
   },
   "by_platform_class": {
-    "sequencing": 2986,
-    "unspecified": 1239,
-    "imaging": 331
+    "sequencing": 3750,
+    "unspecified": 408,
+    "imaging": 407
+  },
+  "by_platform_source": {
+    "Unspecified": 2858,
+    "protocol": 720,
+    "files": 455,
+    "title": 445,
+    "abstract": 87
   },
   "by_disease_group": {
-    "Cancer": 3154,
+    "Cancer": 3163,
     "Other disease": 843,
     "Unspecified": 559
   },
   "by_study_type": {
-    "Biological study": 4535,
-    "Method / tool development": 21
+    "Biological study": 4526,
+    "Method / tool development": 39
   },
   "by_database": {
-    "GEO": 4377,
+    "GEO": 4386,
     "ArrayExpress": 179
   },
   "by_year": {
-    "2026": 1206,
+    "2026": 1215,
     "2025": 1029,
     "2024": 747,
     "2023": 527,
@@ -45,8 +52,8 @@
   },
   "sources": [
     "NCBI GEO (E-utilities esearch/esummary, db=gds)",
-    "EBI ArrayExpress (BioStudies search API)"
+    "EBI ArrayExpress (BioStudies search API)",
+    "GEO series/sample records and BioStudies study files (platform evidence)"
   ],
-  "new_since_last_run": 1,
-  "reclassified": "2026-11-04 10:28 UTC"
+  "new_since_last_run": 9
 }
