@@ -206,7 +206,8 @@ SC_RE = re.compile(
 
 SC_PLATFORM = _c(
     [
-        ("10x Chromium", r"\bchromium\b|10x genomics"),
+        # "10x Genomics Visium" / "10x Genomics Xenium" name the spatial product, not Chromium
+        ("10x Chromium", r"\bchromium\b|10x genomics(?![\s\W]*(visium|xenium))"),
         ("Smart-seq2", r"smart-?seq2?"),
         ("snRNA-seq", r"snrna-?seq|single[- ]nucleus"),
         ("BD Rhapsody", r"bd rhapsody"),
@@ -291,10 +292,12 @@ SUBTYPES = _c(
 
 CANCER = _c(
     [
-        ("NSCLC", r"non-?small[- ]cell lung|\bnsclc\b|lung adenocarcinoma|\bluad\b|lung squamous|\blusc\b"
+        ("NSCLC", r"non[-\u2010\u2013\s]?small[-\u2010\u2013\s]cell lung|\bnsclc\b|lung adenocarcinoma|\bluad\b|lung squamous|\blusc\b"
                   r"|adenocarcinoma of (the )?lungs?|pulmonary adenocarcinoma|\blcnec\b|bronchioloalveolar"
                   r"|lepidic|adenosquamous carcinoma of (the )?lung|large[- ]cell carcinoma of (the )?lung"),
-        ("SCLC", r"small[- ]cell lung cancer|\bsclc\b"),
+        # the lookbehinds keep "non-small cell lung cancer" (any dash or a space)
+        # from also reading as small cell lung cancer
+        ("SCLC", r"(?<!non-)(?<!non\u2013)(?<!non\u2010)(?<!non )small[- ]cell lung cancer|\bsclc\b"),
         # Mesothelioma is a pleural/peritoneal cancer, not a lung cancer; it used to
         # fall into "Lung cancer (other)" and from there into lung searches.
         ("Mesothelioma", r"mesothelioma"),
@@ -431,6 +434,202 @@ def study_type(title, body):
     return "Biological study"
 
 
+# GEO subseries usually end their title with the assay: "... [scRNA-seq]",
+# "... [Xenium in situ]", "... [bulkRNA-seq_Tregs]". The abstract is shared by
+# every subseries and mentions all assays, so it cannot tell them apart; the
+# tag can. A single-cell subseries of a spatial study is single-cell (and paired
+# only through its sibling), and a bulk / ChIP / ATAC subseries is neither.
+TITLE_TAG = re.compile(r"[\[\(]([^\[\]\(\)]{2,60})[\]\)]\s*$")
+TAG_SPATIAL = re.compile(
+    r"\bst\b|spatial|visium|xenium|cosmx|merfish|merscope|geomx|stereo-?seq|slide-?seq|seqfish"
+    r"|starmap|\bcodex\b|\bimc\b|in situ|dbit|curio|molecular cartography",
+    re.I,
+)
+TAG_SC = re.compile(
+    r"sc-?rna|sn-?rna|single[- _]?(cell|nucle)|cite-?seq|chromium|multiome|sc-?atac|smart-?seq"
+    r"|drop-?seq|rhapsody|sc-?tcr|sc-?bcr|\bvdj\b|10x\s*(3|5)",
+    re.I,
+)
+TAG_OTHER = re.compile(
+    r"bulk|chip-?seq|cut ?(&|and|n) ?(run|tag)|cutntag|atac|\bwgs\b|\bwgbs\b|\brrbs\b|\bwes\b|exome"
+    r"|methyl|bisulfite|proteom|mass spec|crispr|microarray|\bacgh\b|\bsnp\b|hi-?c\b|ribo-?seq"
+    r"|\b16s\b|tcr-?seq|bcr-?seq|merip|amplicon|nascent|total ?rna|mirna|small ?rna|\brip\b"
+    r"|dart-?seq|ss-?rna|chromatin",
+    re.I,
+)
+# What a tag must also say for an ATAC or immune-repertoire library to count as
+# a transcriptome: "[scATAC-seq]" and "[scTCR-seq]" are not, "[Multiome]" and
+# "[scRNA-seq and scTCR-seq]" are.
+TAG_HAS_RNA = re.compile(r"rna|multiome|gex|gene expression|transcript|cite-?seq", re.I)
+TAG_RNASEQ = re.compile(r"rna[- _]?seq|rna sequencing", re.I)
+
+
+def title_assay(title):
+    """'spatial' | 'singlecell' | 'rnaseq' | 'other' | None, from the title.
+
+    Mostly from the trailing [assay] tag; a title that is about chromatin
+    accessibility only ("scATAC-seq of first and second-trimester human gonads")
+    is 'other' even without a tag.
+    """
+    m = TITLE_TAG.search(title or "")
+    assay = _tag_assay(m.group(1)) if m else None
+    if assay is None and _atac_only(title or ""):
+        return "other"
+    return assay
+
+
+def _atac_only(text):
+    return bool(
+        re.search(r"atac", text, re.I)
+        and not TAG_HAS_RNA.search(text)
+        and not TAG_SPATIAL.search(text)
+        and not re.search(r"transcriptom|expression|multiom", text, re.I)
+    )
+
+
+def _tag_assay(tag):
+    sp, sc = bool(TAG_SPATIAL.search(tag)), bool(TAG_SC.search(tag))
+    if sp and sc:
+        return None  # "[scRNA-seq and ST]": the record itself is paired
+    if sp:
+        return "spatial"
+    if re.search(r"atac|tcr|bcr|vdj|repertoire", tag, re.I) and not TAG_HAS_RNA.search(tag):
+        return "other"  # chromatin or receptor sequences only, no expression
+    if sc:
+        return "singlecell"
+    if TAG_RNASEQ.search(tag) and not TAG_OTHER.search(tag):
+        # "[RNA-seq]", "[RNA-Seq PDX]": GEO's usual name for the bulk companion
+        # of a [scRNA-seq] or [ST] subseries, but GSE118389 is a Smart-seq2
+        # single-cell series tagged just "[RNA-Seq]". finalize() keeps it when
+        # it has no sibling, or when every sibling is a non-expression assay.
+        return "rnaseq"
+    if TAG_OTHER.search(tag):
+        return "other"
+    return None
+
+
+def linkable(row):
+    """Records that are about to be dropped must not size or join study groups:
+    a 10-series study whose ChIP and ATAC parts are counted looks like
+    boilerplate (groups are capped), while without them it is a real study."""
+    return title_assay(row["title"]) != "other"
+
+
+SC_PLATFORM_NAMES = {name for name, _ in SC_PLATFORM} | {"scRNA-seq (unspecified)"}
+UNSPECIFIED_SPATIAL = "Spatial (unspecified)"
+
+
+def _platform_in(text):
+    img = first_match(IMAGING, text)
+    if img:
+        return img, "imaging"
+    seq = first_match(SEQUENCING, text)
+    if seq == UNSPECIFIED_SPATIAL:
+        # Spatial, but the text never says how it was made: claiming
+        # "sequencing-based" here would put it under the wrong filter.
+        return seq, "unspecified"
+    return (seq, "sequencing") if seq else (None, None)
+
+
+def detect_platform(title, text):
+    """The spatial platform of a record, preferring what its own title says.
+
+    The abstract of a multi-assay study names every platform used, and because
+    imaging platforms are checked first, a "[Visium]" subseries of a study that
+    also ran Xenium used to be labelled Xenium. The trailing [assay] tag, then
+    the title, then the text decide; a named platform beats "unspecified".
+    """
+    m = TITLE_TAG.search(title or "")
+    fallback = (None, None)
+    for src in ([m.group(1)] if m else []) + [title or "", text or ""]:
+        found, cls = _platform_in(src)
+        if found and found != UNSPECIFIED_SPATIAL:
+            return found, cls
+        if found and not fallback[0]:
+            fallback = (found, cls)
+    return fallback
+
+
+# Organ-specific subtypes. A breast-cancer study whose abstract mentions lung
+# adenocarcinoma in passing must not answer a LUAD search. Subtypes not listed
+# here (EGFR-mutant, KRAS-mutant, HER2-positive, IDH, MSI, HPV ...) occur in
+# several cancers and are kept whatever the disease.
+SUBTYPE_DISEASES = {
+    "LUAD": {"NSCLC", "Lung cancer (other)"},
+    "LUSC": {"NSCLC", "Lung cancer (other)"},
+    "LCNEC / large cell": {"NSCLC", "SCLC", "Lung cancer (other)"},
+    "TNBC": {"Breast cancer"},
+    "Luminal": {"Breast cancer"},
+    "Invasive ductal (IDC)": {"Breast cancer"},
+    "Invasive lobular (ILC)": {"Breast cancer"},
+    "DCIS": {"Breast cancer"},
+    "ccRCC": {"Kidney / RCC"},
+    "pRCC": {"Kidney / RCC"},
+    "chRCC": {"Kidney / RCC"},
+    "CRPC": {"Prostate cancer"},
+    "NEPC": {"Prostate cancer"},
+    "DIPG / diffuse midline": {"Glioma / GBM"},
+    "AML": {"Leukemia"},
+    "B-ALL": {"Leukemia"},
+    "T-ALL": {"Leukemia"},
+    "CLL": {"Leukemia", "Lymphoma"},
+    "CML": {"Leukemia"},
+    "MDS": {"Leukemia"},
+    "DLBCL": {"Lymphoma"},
+    "Follicular lymphoma": {"Lymphoma"},
+    "Mantle cell lymphoma": {"Lymphoma"},
+    "Hodgkin": {"Lymphoma"},
+    "ESCC": {"Esophageal cancer", "Head & neck cancer"},
+    "Esophageal adenocarcinoma": {"Esophageal cancer", "Gastric cancer"},
+    "iCCA": {"Liver / HCC"},
+    "eCCA": {"Liver / HCC"},
+    "PDAC": {"Pancreatic cancer"},
+    "HCC": {"Liver / HCC"},
+    "MIBC": {"Bladder cancer"},
+    "NMIBC": {"Bladder cancer"},
+    "HGSOC": {"Ovarian cancer"},
+    "Ovarian clear cell": {"Ovarian cancer"},
+    "HNSCC": {"Head & neck cancer"},
+    "OSCC": {"Head & neck cancer"},
+    "Basal cell carcinoma": {"Skin cancer (non-melanoma)"},
+    "cSCC": {"Skin cancer (non-melanoma)"},
+}
+
+
+def compatible_subtypes(subtypes, disease):
+    if disease == "Cancer (other / pan-cancer)":
+        return list(subtypes)
+    return [s for s in subtypes if s not in SUBTYPE_DISEASES or disease in SUBTYPE_DISEASES[s]]
+
+# When the text names no organ, the disease usually does.
+DISEASE_TISSUE = {
+    "NSCLC": "Lung",
+    "SCLC": "Lung",
+    "Lung cancer (other)": "Lung",
+    "Mesothelioma": "Pleura / peritoneum",
+    "Glioma / GBM": "Brain / CNS",
+    "Meningioma": "Brain / CNS",
+    "Melanoma": "Skin",
+    "Leukemia": "Bone marrow / blood",
+    "Multiple myeloma": "Bone marrow / blood",
+    "Lymphoma": "Lymph node / spleen",
+    "Breast cancer": "Breast",
+    "Colorectal cancer": "Colon / intestine",
+    "Pancreatic cancer": "Pancreas",
+    "Prostate cancer": "Prostate",
+    "Liver / HCC": "Liver",
+    "Gastric cancer": "Stomach",
+    "Ovarian cancer": "Ovary / uterus / placenta",
+    "Kidney / RCC": "Kidney",
+    "Head & neck cancer": "Head & neck",
+    "Esophageal cancer": "Esophagus",
+    "Bladder cancer": "Bladder / urinary",
+    "Thyroid cancer": "Thyroid",
+}
+
+GENERIC_CANCER = "Cancer (other / pan-cancer)"
+
+
 CELLS_RE = re.compile(
     r"([\d]{1,3}(?:[,\.]\d{3})+|\d{4,9})\s*(?:single[- ])?(?:cells|nuclei)\b", re.I
 )
@@ -496,12 +695,16 @@ def squash(s, n):
 def classify(title, body, extra=""):
     """Return the derived fields for one record."""
     text = f"{title} || {body} || {extra}"
-    img = first_match(IMAGING, text)
-    seq = None if img else first_match(SEQUENCING, text)
-    platform = img or seq
+    platform, platform_class = detect_platform(title, text)
     has_sc = bool(SC_RE.search(text))
     disease_text = DISEASE_NOISE.sub(" ", text)
     cancer = first_match(CANCER, disease_text)
+    # The title says what the study is about; the abstract often names other
+    # cancers in passing (an EGFR-inhibitor TNBC study that cites lung cancer
+    # used to land in NSCLC because NSCLC is first in the list).
+    title_cancer = first_match(CANCER, DISEASE_NOISE.sub(" ", title or ""))
+    if title_overrides(title_cancer, cancer):
+        cancer = title_cancer
     if cancer and PAN_CANCER_TITLE.search(title or ""):
         cancer = "Cancer (other / pan-cancer)"
     other = None if cancer else first_match(OTHER_DISEASE, disease_text)
@@ -509,19 +712,59 @@ def classify(title, body, extra=""):
         other = "Healthy reference atlas"
     return {
         "platform": platform,
-        "platform_class": "imaging" if img else ("sequencing" if seq else None),
+        "platform_class": platform_class,
         "sc_platform": first_match(SC_PLATFORM, text) if has_sc else None,
         "has_sc": has_sc,
         "disease": cancer or other or "Unspecified",
         "disease_group": "Cancer" if cancer else ("Other disease" if other else "Unspecified"),
         # Subtypes are only meaningful once a record reads as cancer; leaving the
         # gate off would tag immunology studies with blood-cancer abbreviations.
-        "subtypes": all_matches(SUBTYPES, disease_text) if cancer else [],
-        "tissue": best_tissue(text),
+        "subtypes": compatible_subtypes(all_matches(SUBTYPES, disease_text), cancer) if cancer else [],
+        "tissue": tissue_for(best_tissue(text), cancer or other),
         "cells": cell_count(text),
         "access": "Controlled" if CONTROLLED_RE.search(text) else "Open",
         "study_type": study_type(title, body),
     }
+
+
+LUNG_SPECIFIC = {"NSCLC", "SCLC", "Mesothelioma"}
+
+
+def title_overrides(title_cancer, body_cancer):
+    """Should the cancer named in the title replace the one from the text?"""
+    if not title_cancer or title_cancer == GENERIC_CANCER:
+        return False
+    # "lung cancer" in the title is less specific than NSCLC in the abstract
+    if title_cancer == "Lung cancer (other)" and body_cancer in LUNG_SPECIFIC:
+        return False
+    return True
+
+
+def tissue_for(tissue, disease):
+    if tissue == "Other" and disease in DISEASE_TISSUE:
+        return DISEASE_TISSUE[disease]
+    return tissue
+
+
+def apply_title_assay(row, assay):
+    """Make a subseries carry its own assay, not the study's. False = drop it."""
+    if assay == "other":
+        return False
+    if assay == "singlecell":
+        row["modality"] = "singlecell"
+        m = TITLE_TAG.search(row["title"])
+        tag_platform = first_match(SC_PLATFORM, m.group(1)) if m else None
+        if tag_platform:
+            row["platform"] = row["sc_platform"] = tag_platform
+        elif row["platform"] not in SC_PLATFORM_NAMES:
+            row["platform"] = row.get("sc_platform") or "scRNA-seq (unspecified)"
+        row["platform_class"] = "sequencing"
+    elif assay == "spatial":
+        row["modality"] = "spatial"
+        if row["platform"] in SC_PLATFORM_NAMES:
+            row["platform"] = UNSPECIFIED_SPATIAL
+            row["platform_class"] = "unspecified"
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -604,7 +847,7 @@ def ae_title_links(rows):
     """Pairs of ArrayExpress accessions that look like halves of one study."""
     ae = []
     for r in rows:
-        if r.get("db") != "ArrayExpress":
+        if r.get("db") != "ArrayExpress" or not linkable(r):
             continue
         prefix, num = _ae_number(r["accession"])
         core = _ae_title_core(r["title"])
@@ -621,16 +864,35 @@ def ae_title_links(rows):
     return links
 
 
-def link_siblings(rows):
-    """Link subseries of one study and promote pairing to the study level.
+def geo_title_links(rows):
+    """GEO subseries whose titles differ only in the trailing [assay] tag.
+
+    Most subseries share the abstract, but some do not (GSE292469 snRNA-seq and
+    GSE342824 Xenium of one osimertinib study), so the title is a second clue.
+    """
+    by_stem = {}
+    for r in rows:
+        if r.get("db") != "GEO" or not TITLE_TAG.search(r["title"]) or not linkable(r):
+            continue
+        stem = TITLE_TAG.sub("", r["title"]).strip().lower()
+        if len(stem) >= 30:
+            by_stem.setdefault(stem, []).append(r["accession"])
+    links = []
+    for accs in by_stem.values():
+        if 2 <= len(accs) <= 8:
+            links += [(accs[0], a) for a in accs[1:]]
+    return links
+
+
+def group_and_promote(rows, edges, max_group=12):
+    """Union the edges into studies; set siblings; promote split pairs.
 
     A subseries that only carries scRNA-seq is still part of a paired study when
     a sibling carries the spatial half. The record keeps its own platform; only
     the modality is promoted, and `pairing` records whether the pairing comes
     from the record itself or from its siblings, so the site can say which.
     """
-    # Union-find over two kinds of evidence: a shared abstract (GEO subseries)
-    # and a matching assay-stripped title (ArrayExpress companion studies).
+    present = {r["accession"] for r in rows}
     parent = {}
 
     def find(a):
@@ -640,22 +902,15 @@ def link_siblings(rows):
             a = parent[a]
         return a
 
-    def union(a, b):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[rb] = ra
+    for a, b in edges:
+        if a in present and b in present:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
 
-    by_key = {}
     for r in rows:
-        k = r.pop("_k", "")
-        if k:
-            by_key.setdefault(k, []).append(r["accession"])
-    for accs in by_key.values():
-        if 2 <= len(accs) <= 8:  # a very large group means the key caught boilerplate
-            for a in accs[1:]:
-                union(accs[0], a)
-    for a, b in ae_title_links(rows):
-        union(a, b)
+        r["siblings"] = []
+        r["pairing"] = "record" if r["modality"] == "paired" else ""
 
     groups = {}
     for r in rows:
@@ -664,12 +919,15 @@ def link_siblings(rows):
 
     promoted = 0
     for members in groups.values():
-        if not 2 <= len(members) <= 8:
+        if not 2 <= len(members) <= max_group:
             continue
         accessions = [m["accession"] for m in members]
         has_spatial = any(m["modality"] in ("spatial", "paired") for m in members)
+        # sc_platform of a spatial-tagged subseries comes from the abstract the
+        # whole study shares, so it says nothing about what that series holds.
         has_sc = any(
-            m["modality"] in ("singlecell", "paired") or m["sc_platform"]
+            m["modality"] in ("singlecell", "paired")
+            or (m["sc_platform"] and title_assay(m["title"]) != "spatial")
             for m in members
         )
         for m in members:
@@ -678,12 +936,79 @@ def link_siblings(rows):
                 m["modality"] = "paired"
                 m["pairing"] = "series"
                 promoted += 1
-
-    for r in rows:
-        r.pop("_k", None)
-        r.setdefault("siblings", [])
-        r.setdefault("pairing", "record" if r["modality"] == "paired" else "")
     return promoted
+
+
+def _components(accessions, edges):
+    parent = {a: a for a in accessions}
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for a, b in edges:
+        if a in parent and b in parent:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+    comps = {}
+    for a in accessions:
+        comps.setdefault(find(a), []).append(a)
+    return list(comps.values())
+
+
+def finalize(rows, edges):
+    """Apply [assay] tags, drop non-spatial/non-single-cell subseries, link.
+
+    Studies are grouped over every record before anything is dropped: the
+    abstract edges form a star around the first subseries found, and when that
+    one is the bulk companion, dropping it first would orphan its siblings.
+    """
+    assays = {r["accession"]: title_assay(r["title"]) for r in rows}
+    comps = _components([r["accession"] for r in rows], edges)
+    comp_of = {a: c for c in comps for a in c}
+    kept = []
+    for r in rows:
+        acc = r["accession"]
+        assay = assays[acc]
+        if assay == "rnaseq":
+            others = [assays[x] for x in comp_of[acc] if x != acc]
+            # Inside a multi-series study a plain "[RNA-seq]" is the bulk
+            # companion - unless every sibling is a non-expression assay
+            # (GSE118389 [RNA-Seq] beside GSE118303 [WES]): then it is the
+            # study's only expression data and its own text decides.
+            if others and not all(o == "other" for o in others):
+                continue
+            assay = None
+        if apply_title_assay(r, assay):
+            kept.append(r)
+    kept_acc = {r["accession"] for r in kept}
+    kept_edges = []
+    for c in comps:
+        members = [a for a in c if a in kept_acc]
+        kept_edges += [(members[0], a) for a in members[1:]]
+    promoted = group_and_promote(kept, kept_edges)
+    return kept, len(rows) - len(kept), promoted
+
+
+def link_siblings(rows):
+    """Edges between the parts of one study, from three kinds of evidence: a
+    shared abstract (GEO subseries), a title that differs only in the [assay]
+    tag (GEO), and an assay-stripped title match (ArrayExpress companions)."""
+    by_key = {}
+    for r in rows:
+        k = r.pop("_k", "")
+        if k and linkable(r):
+            by_key.setdefault(k, []).append(r["accession"])
+    edges = []
+    for accs in by_key.values():
+        if 2 <= len(accs) <= 8:  # a very large group means the key caught boilerplate
+            edges += [(accs[0], a) for a in accs[1:]]
+    edges += geo_title_links(rows)
+    edges += ae_title_links(rows)
+    return edges
 
 
 def geo_url(acc):
@@ -734,7 +1059,7 @@ def build():
                 "samples": r["n"],
                 "cells": c["cells"],
                 "year": (r["pdat"] or "")[:4],
-                "date": r["pdat"],
+                "date": (r["pdat"] or "").replace("/", "-"),
                 "pmid": str(r["pmid"] or ""),
                 "access": c["access"],
                 "url": geo_url(r["acc"]),
@@ -781,7 +1106,7 @@ def build():
                 "samples": r["n"],
                 "cells": c["cells"],
                 "year": (r["pdat"] or "")[:4],
-                "date": r["pdat"],
+                "date": (r["pdat"] or "").replace("/", "-"),
                 "pmid": str(r["pmid"] or ""),
                 "access": c["access"],
                 "url": geo_url(r["acc"]),
@@ -841,7 +1166,8 @@ def build():
             }
         )
 
-    promoted = link_siblings(rows)
+    rows, dropped, promoted = finalize(rows, link_siblings(rows))
+    print(f"title assay tags: dropped {dropped} non-spatial, non-single-cell subseries", flush=True)
     print(f"\nsubseries pairing: {promoted} records promoted to paired via a sibling series", flush=True)
 
     rows.sort(key=lambda x: (x["date"] or ""), reverse=True)
@@ -876,46 +1202,56 @@ def summarise(rows):
 def reclassify(rows):
     """Apply the newer rules to an existing catalog without re-harvesting.
 
-    The stored description is truncated, so only rules that are safe on
-    title + stored text are re-applied: mesothelioma and pan-cancer disease
-    labels, study type, and ArrayExpress pairing. GEO subseries links need the
-    full abstract, which is not stored, so the links found by the last full
-    harvest are kept. The next full harvest recomputes everything.
+    The stored description is truncated, so only rules that are safe on the
+    title + stored text are re-applied: study type, title-first disease,
+    mesothelioma and pan-cancer labels, tissue fallback, the [assay] tag of
+    subseries, and study linking. GEO links found from the full abstract by the
+    last harvest are kept as edges. The next full harvest recomputes everything.
     """
-    by_acc = {r["accession"]: r for r in rows}
+    edges = []
+    unlinkable = {r["accession"] for r in rows if not linkable(r)}
+    for r in rows:
+        if r["accession"] not in unlinkable:
+            edges += [(r["accession"], s) for s in r.get("siblings", []) if s not in unlinkable]
+        # undo the previous sibling promotion; it is recomputed below
+        if r.get("pairing") == "series":
+            r["modality"] = "singlecell" if r["platform"] in SC_PLATFORM_NAMES else "spatial"
+
     for r in rows:
         r["study_type"] = study_type(r["title"], r["description"])
         text = f"{r['title']} || {r['description']}"
         if r["disease"] == "Lung cancer (other)" and re.search(r"mesothelioma", text, re.I):
             r["disease"] = "Mesothelioma"
-        if r["tissue"] == "Other" and r["disease"] in ("NSCLC", "SCLC"):
-            r["tissue"] = "Lung"
+        title_cancer = first_match(CANCER, DISEASE_NOISE.sub(" ", r["title"]))
+        if r["disease_group"] == "Cancer" and title_overrides(title_cancer, r["disease"]):
+            r["disease"] = title_cancer
         if r["disease_group"] == "Cancer" and PAN_CANCER_TITLE.search(r["title"]):
-            r["disease"] = "Cancer (other / pan-cancer)"
-        r.setdefault("siblings", [])
-        r.setdefault("pairing", "record" if r["modality"] == "paired" else "")
-
-    # merge ArrayExpress title links into the existing sibling groups
-    promoted = 0
-    for a, b in ae_title_links(rows):
-        group = {a, b} | set(by_acc[a]["siblings"]) | set(by_acc[b]["siblings"])
-        members = [by_acc[x] for x in sorted(group) if x in by_acc]
-        has_spatial = any(m["modality"] in ("spatial", "paired") for m in members)
-        has_sc = any(m["modality"] in ("singlecell", "paired") or m["sc_platform"] for m in members)
-        for m in members:
-            m["siblings"] = [x["accession"] for x in members if x is not m]
-            if has_spatial and has_sc and m["modality"] != "paired":
-                m["modality"] = "paired"
-                m["pairing"] = "series"
-                promoted += 1
-    print(f"reclassify: {promoted} ArrayExpress records promoted to paired", flush=True)
-    return rows
+            r["disease"] = GENERIC_CANCER
+        r["tissue"] = tissue_for(r["tissue"], r["disease"])
+        r["subtypes"] = compatible_subtypes(r["subtypes"], r["disease"])
+        r["date"] = (r["date"] or "").replace("/", "-")
+        # a platform named in the record's own title wins over the abstract's
+        if r["platform"] not in SC_PLATFORM_NAMES:
+            named, cls = detect_platform(r["title"], "")
+            if named and named != UNSPECIFIED_SPATIAL:
+                r["platform"], r["platform_class"] = named, cls
+        if r["platform"] == UNSPECIFIED_SPATIAL:
+            r["platform_class"] = "unspecified"
+    edges += geo_title_links(rows)
+    edges += ae_title_links(rows)
+    kept, dropped, promoted = finalize(rows, edges)
+    print(f"reclassify: dropped {dropped} non-spatial/non-single-cell subseries, "
+          f"{promoted} records paired via siblings", flush=True)
+    return kept
 
 
 def reclassify_main():
     existing = DATA / "datasets.json"
     doc = json.loads(existing.read_text())
     rows = reclassify(doc["datasets"])
+    if len(rows) < 200:
+        print("reclassify left too few records - refusing to write", file=sys.stderr)
+        return 1
     meta = summarise(rows)
     meta["new_since_last_run"] = doc.get("meta", {}).get("new_since_last_run", 0)
     meta["generated"] = doc.get("meta", {}).get("generated", meta["generated"])
