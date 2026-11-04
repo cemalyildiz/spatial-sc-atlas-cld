@@ -125,8 +125,8 @@
       <table class="fieldtable">
         <thead><tr><th>From the source database, verbatim</th><th>Derived here, automatically</th></tr></thead>
         <tbody><tr>
-          <td>Accession · title · description · organism · sample count · release date · PubMed ID</td>
-          <td>Modality · platform · imaging vs sequencing · disease category · subtype · study type · tissue · cell count</td>
+          <td>Accession · title · description · release date · PubMed ID · organism and sample count (GEO)</td>
+          <td>Modality · platform · imaging vs sequencing · disease category · subtype · study type · tissue · cell count · organism (ArrayExpress, read from the text)</td>
         </tr></tbody>
       </table>
       <p>
@@ -147,6 +147,14 @@
         too often for that to be read as scope. And <strong>mesothelioma</strong> is its own
         category rather than a lung cancer, since it arises in the pleura or peritoneum; it no
         longer appears in lung filters.
+      </p>
+      <p>
+        More generally, the cancer named in the <em>title</em> wins over one met first in the
+        abstract — an EGFR-inhibitor study of triple-negative breast cancer that cites lung cancer
+        is a breast cancer record. The one exception is a title that only says "lung cancer" over
+        an abstract that says NSCLC or SCLC: the more specific label is kept. When the text names no
+        organ, the tissue is taken from the disease (glioma → brain, leukaemia → bone marrow /
+        blood, melanoma → skin).
       </p>
 
       <h2>Modalities</h2>
@@ -174,6 +182,12 @@
         phrase only, which means a study that writes nothing but the abbreviation will carry no
         subtype — absence of a label is not evidence of absence. Subtypes are only assigned to
         records that already read as cancer.
+      </p>
+      <p>
+        Organ-specific subtypes must also fit the record's disease. A breast-cancer study whose
+        abstract mentions lung adenocarcinoma in passing does not carry <strong>LUAD</strong>, so a
+        LUAD search returns lung studies only. Molecular labels — EGFR- and KRAS-mutant,
+        HER2-positive, IDH, MSI, HPV — occur in several cancers and are kept whatever the disease.
       </p>
 
       <h2>Study type</h2>
@@ -213,6 +227,29 @@
         siblings before trusting a paired badge that rests on it.
       </p>
       <p>
+        Some GEO subseries do not share an abstract either — the snRNA-seq and Xenium halves of one
+        osimertinib-resistance study (GSE292469, GSE342824) each describe their own assay. Their
+        titles are identical apart from the bracketed assay tag at the end, so GEO records whose
+        titles differ only in that tag are linked too.
+      </p>
+      <p>
+        That tag also says what each subseries actually holds. The shared abstract mentions every
+        assay of the study, so on text alone a <em>[scRNA-seq]</em> subseries of a spatial study
+        used to be listed with the spatial platform and marked paired on its own. Now a subseries
+        tagged single-cell is single-cell (paired only through its sibling), one tagged spatial is
+        spatial, and one tagged with an assay that is neither — bulk RNA-seq, ATAC (single-cell
+        ATAC included), TCR/BCR repertoire, ChIP, CUT&amp;Tag, methylation — is left out of the
+        catalog, as is an untagged record whose title is about ATAC only. A plain
+        <em>[RNA-seq]</em> inside a multi-series study is the bulk companion and is dropped, unless
+        every other part of the study is a non-expression assay: GSE118389 <em>[RNA-Seq]</em> sits
+        beside GSE118303 <em>[WES]</em>, is the study's only expression data, and stays.
+      </p>
+      <p>
+        The tag and title also name the platform. The abstract of a multi-assay study lists every
+        platform it used, so the platform a record's own title names wins: the
+        <em>[Visium]</em> subseries of a study that also ran Xenium is a Visium record.
+      </p>
+      <p>
         A related trap: many spatial studies never write "spatial transcriptomics" at all — they
         write <strong>ST</strong> and nothing else, which makes a spatial series look single-cell.
         ST is matched here only beside a word that removes the ambiguity (<em>ST data</em>,
@@ -229,6 +266,12 @@
         region resolution — Visium and Visium HD, Slide-seq, Stereo-seq, GeoMx DSP, DBiT-seq.
         The trade-off is coverage against resolution, and it is usually the first thing you need
         to filter on.
+      </p>
+      <p>
+        Many spatial records never say which platform they used — they write "spatial
+        transcriptomics" and stop. Those are listed as <em>Spatial (unspecified)</em> with
+        production method <strong>Not stated</strong> instead of being counted as sequencing-based;
+        the source record or the paper usually settles it.
       </p>
 
       <h2>How it stays current</h2>

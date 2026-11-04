@@ -17,7 +17,7 @@ single-cell data, which is what you need for deconvolution, label transfer and s
 | Filter | Values |
 | --- | --- |
 | Modality | Paired (spatial + single-cell) · Spatial only · Single-cell only |
-| Production method | Imaging-based · Sequencing-based |
+| Production method | Imaging-based · Sequencing-based · Not stated (spatial, but the record never names its platform) |
 | Platform | Xenium, MERFISH/MERSCOPE, CosMx, seqFISH, STARmap, in situ sequencing, Visium, Visium HD, GeoMx DSP, Slide-seq, Stereo-seq, Slide-tags, DBiT-seq, 10x Chromium, … |
 | Disease group | Cancer · Other disease · Unspecified |
 | Disease / cancer type | NSCLC, SCLC, mesothelioma, breast, colorectal, glioma/GBM, meningioma, pancreatic, melanoma, …, plus non-cancer categories (fibrosis, neurodegenerative, autoimmune, cardiovascular, …) |
@@ -38,7 +38,7 @@ straight into a download script.
 
 | Verbatim from the source database | Derived here, automatically |
 | --- | --- |
-| accession · title · description · organism · sample count · release date · PubMed ID | modality · platform · imaging vs sequencing · disease category · subtype · tissue · cell count |
+| accession · title · description · organism (GEO) · sample count (GEO) · release date · PubMed ID | modality · platform · imaging vs sequencing · disease category · subtype · study type · tissue · cell count · organism (ArrayExpress) |
 
 Derived fields are pattern-matched from each record's title and description by the vocabularies at
 the top of [`scripts/harvest.py`](scripts/harvest.py). They are good enough to filter and browse
@@ -54,8 +54,32 @@ found by grouping records that share the study abstract verbatim. ArrayExpress c
 their titles match once assay words are removed and their accession numbers are close. Both are
 heuristics, so check before relying on them.
 
-A record whose *title* says it spans many cancer types (pan-cancer, "30 cancer types") is filed as
-pan-cancer even when its abstract names one cancer first.
+GEO subseries whose titles differ only in the trailing `[assay]` tag are linked as well, for studies
+whose subseries write their own abstract (GSE292469 snRNA-seq + GSE342824 Xenium). The tag also
+decides what each subseries holds: `[scRNA-seq]` → single-cell (paired only through a sibling),
+`[ST]`/`[Visium]`/`[Xenium]` → spatial, and a tag that is neither (bulk RNA-seq, ATAC including
+single-cell ATAC, TCR/BCR/VDJ repertoire, ChIP, CUT&Tag, methylation, RRBS/WGBS, aCGH) → left out, as
+is an untagged record whose title is about ATAC only. A plain `[RNA-seq]` inside a multi-series study is
+the bulk companion and is dropped — unless every other part of the study is a non-expression assay
+(GSE118389 `[RNA-Seq]` beside GSE118303 `[WES]`), where it is the only expression data and stays.
+Groups are formed before anything is dropped, so removing a bulk subseries never splits a study.
+
+The platform named in a record's own tag or title wins over the platforms its abstract lists, so the
+`[Visium]` subseries of a study that also ran Xenium is a Visium record. A spatial record that never
+names its platform is `Spatial (unspecified)` with production method *Not stated* rather than being
+counted as sequencing-based.
+
+The cancer named in the *title* wins over the first one found in the abstract, except that a title
+saying only "lung cancer" does not override NSCLC/SCLC from the abstract. A title that says it spans
+many cancer types (pan-cancer, "30 cancer types") is filed as pan-cancer. When the text names no
+organ, the tissue is taken from the disease (glioma → brain, leukaemia → bone marrow / blood, …).
+Organ-specific subtypes are kept only on a matching disease: a breast-cancer study that cites lung
+adenocarcinoma does not carry `LUAD`. Molecular labels (EGFR-, KRAS-mutant, HER2-positive, IDH, MSI,
+HPV) occur in several cancers and are kept whatever the disease.
+
+Release dates are ISO (`YYYY-MM-DD`) for both sources. ArrayExpress search results carry no sample
+count or organism field, so for those records the sample count is left blank and the organism is
+read from the text.
 
 Improving a label means editing a regex in `harvest.py` and re-running the harvest — not hand-editing
 `data/datasets.json`, which is regenerated on every run.
