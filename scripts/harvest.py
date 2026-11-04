@@ -1064,7 +1064,9 @@ def link_siblings(rows):
 # fetch has a time budget: what does not fit is picked up on the next run.
 ENRICH_VERSION = 1
 ENRICH_PATH = DATA / "enrichment.json"
-ENRICH_BUDGET_S = float(os.environ.get("ENRICH_BUDGET_S", "2400"))
+# 30 minutes: with the ~3-minute harvest this stays inside the workflow's
+# 45-minute job limit; whatever does not fit is fetched on the next run.
+ENRICH_BUDGET_S = float(os.environ.get("ENRICH_BUDGET_S", "1800"))
 ENRICH_WORKERS = 2
 ENRICH_PAUSE = 0.6
 GEO_ACC = "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi"
