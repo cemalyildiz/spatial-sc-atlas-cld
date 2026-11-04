@@ -126,7 +126,7 @@
         <thead><tr><th>From the source database, verbatim</th><th>Derived here, automatically</th></tr></thead>
         <tbody><tr>
           <td>Accession · title · description · organism · sample count · release date · PubMed ID</td>
-          <td>Modality · platform · imaging vs sequencing · disease category · subtype · tissue · cell count</td>
+          <td>Modality · platform · imaging vs sequencing · disease category · subtype · study type · tissue · cell count</td>
         </tr></tbody>
       </table>
       <p>
@@ -139,6 +139,14 @@
         <span class="sib-chip">+1 series</span> chip and list the sibling accessions in the detail
         panel — so a paired badge never means one accession necessarily holds everything. Confirm
         on the source page before relying on it.
+      </p>
+      <p>
+        Two disease rules are worth knowing because they move records between filters. A study whose
+        <em>title</em> says it spans many cancer types is filed as <strong>pan-cancer</strong> even
+        when its abstract names one cancer first — abstracts mention several cancers in passing far
+        too often for that to be read as scope. And <strong>mesothelioma</strong> is its own
+        category rather than a lung cancer, since it arises in the pleura or peritoneum; it no
+        longer appears in lung filters.
       </p>
 
       <h2>Modalities</h2>
@@ -168,6 +176,23 @@
         records that already read as cancer.
       </p>
 
+      <h2>Study type</h2>
+      <p>
+        A small number of records are not biology but <strong>method or tool development</strong>:
+        the deposit exists to demonstrate a new algorithm, and its data are a demonstration set
+        chosen to make the method look good rather than to answer a biological question. They are
+        labelled rather than dropped, since the data are often perfectly usable, and the
+        <em>Study type</em> filter separates them. Such a record carries a
+        <span class="method-chip">Method</span> chip.
+      </p>
+      <p>
+        A study is read as method development when its title follows the
+        <em>ACRONYM: … tool/framework/pipeline</em> shape, when it begins with
+        <em>Benchmarking</em>, or when the abstract says in so many words that the authors develop
+        or present a computational method. That is a narrow test on purpose: a biological study
+        that merely used a new tool should stay a biological study.
+      </p>
+
       <h2>Studies split across several series</h2>
       <p>
         GEO often splits one study into a SuperSeries with a subseries per assay — the scRNA-seq
@@ -177,6 +202,15 @@
         why a record whose own data is single-cell can still be marked paired: its sibling holds the
         spatial half. The grouping is a heuristic on shared text, so check the siblings really are
         one study before building on it.
+      </p>
+      <p>
+        ArrayExpress splits studies too, but its companion records write their own abstract, so
+        there is no shared text to group on. What they do share is the title once the assay words
+        are stripped out — <em>Single cell RNA-seq atlas of human NSCLC lesions and non-involved
+        tissue</em> beside <em>Spatial transcriptomics (10x Visium) of human NSCLC lesions and
+        non-involved tissue</em> — and accession numbers submitted close together. Records matching
+        on both are linked the same way. It is the looser of the two heuristics, so open the
+        siblings before trusting a paired badge that rests on it.
       </p>
       <p>
         A related trap: many spatial studies never write "spatial transcriptomics" at all — they

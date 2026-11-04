@@ -20,8 +20,9 @@ single-cell data, which is what you need for deconvolution, label transfer and s
 | Production method | Imaging-based · Sequencing-based |
 | Platform | Xenium, MERFISH/MERSCOPE, CosMx, seqFISH, STARmap, in situ sequencing, Visium, Visium HD, GeoMx DSP, Slide-seq, Stereo-seq, Slide-tags, DBiT-seq, 10x Chromium, … |
 | Disease group | Cancer · Other disease · Unspecified |
-| Disease / cancer type | NSCLC, SCLC, breast, colorectal, glioma/GBM, meningioma, pancreatic, melanoma, …, plus non-cancer categories (fibrosis, neurodegenerative, autoimmune, cardiovascular, …) |
+| Disease / cancer type | NSCLC, SCLC, mesothelioma, breast, colorectal, glioma/GBM, meningioma, pancreatic, melanoma, …, plus non-cancer categories (fibrosis, neurodegenerative, autoimmune, cardiovascular, …) |
 | Subtype (multi-value) | LUAD, LUSC, LCNEC, TNBC, HER2-positive, luminal, ccRCC, CRPC, NEPC, ESCC, PDAC, HCC, DLBCL, B-ALL, T-ALL, CLL, MIBC, HGSOC, HNSCC, DIPG, plus molecular labels — EGFR-mutant, ALK-rearranged, KRAS-mutant, IDH-mutant, MSI-high, HPV-positive |
+| Study type | Biological study · Method / tool development (the data are usually a demonstration set; titled `TOOL: …`, `Benchmarking …`, or the abstract says "we develop a method/tool/…") |
 | Tissue / organ | Lung, brain/CNS, breast, colon/intestine, liver, kidney, … |
 | Organism | Human · Mouse · Human &amp; Mouse |
 | Source database | GEO · ArrayExpress |
@@ -48,8 +49,13 @@ A `Paired` badge means one of two things: the record's own text mentions both a 
 single-cell data, or the record belongs to a study GEO split across several series and a sibling
 carries the other half. The second kind shows a `+N series` chip and lists the sibling accessions.
 GEO's API does not expose SuperSeries links (`relations` is empty for subseries), so siblings are
-found by grouping records that share the study abstract verbatim — a heuristic, so check before
-relying on it.
+found by grouping records that share the study abstract verbatim. ArrayExpress companion studies
+(e.g. E-MTAB-13526 scRNA-seq + E-MTAB-13530 Visium) do not share an abstract, so they are linked when
+their titles match once assay words are removed and their accession numbers are close. Both are
+heuristics, so check before relying on them.
+
+A record whose *title* says it spans many cancer types (pan-cancer, "30 cancer types") is filed as
+pan-cancer even when its abstract names one cancer first.
 
 Improving a label means editing a regex in `harvest.py` and re-running the harvest — not hand-editing
 `data/datasets.json`, which is regenerated on every run.
@@ -84,6 +90,7 @@ Optionally add a repository secret `NCBI_API_KEY`
 
 ```bash
 python3 scripts/harvest.py     # stdlib only, no dependencies
+python3 scripts/harvest.py --reclassify   # re-apply label rules to the existing catalog, no network
 python3 -m http.server 8000    # then open http://localhost:8000
 ```
 
