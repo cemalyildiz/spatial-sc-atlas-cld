@@ -24,6 +24,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,6 +65,25 @@ def _request(url, data=None, tries=4):
         except Exception as exc:  # noqa: BLE001 - network flakiness is expected
             last = exc
             time.sleep(2 * (attempt + 1))
+    print(f"  ! giving up on {url[:90]}: {last}", file=sys.stderr)
+    return None
+
+
+def _request_text(url, tries=3):
+    """GET a text page; "" for a 404 (nothing deposited), None when unreachable."""
+    last = None
+    for attempt in range(tries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                return resp.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return ""
+            last = exc
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+        time.sleep(3 * (attempt + 1))
     print(f"  ! giving up on {url[:90]}: {last}", file=sys.stderr)
     return None
 
@@ -181,6 +201,7 @@ SEQUENCING = _c(
         ("DBiT-seq", r"\bdbit-?seq\b"),
         ("Curio Seeker", r"\bcurio seeker\b"),
         ("Open-ST", r"\bopen-?st\b"),
+        ("Tomo-seq", r"\btomo-?seq\b"),
         # Plenty of studies never write "spatial transcriptomics" out — they say
         # "ST" and nothing else, which is how a spatial series ends up looking
         # like a single-cell one. A bare \bST\b is far too noisy (ST-EPN =
@@ -516,6 +537,7 @@ def linkable(row):
 
 
 SC_PLATFORM_NAMES = {name for name, _ in SC_PLATFORM} | {"scRNA-seq (unspecified)"}
+IMAGING_NAMES = {name for name, _ in IMAGING}
 UNSPECIFIED_SPATIAL = "Spatial (unspecified)"
 
 
@@ -548,6 +570,20 @@ def detect_platform(title, text):
         if found and not fallback[0]:
             fallback = (found, cls)
     return fallback
+
+
+def platform_source(title, platform):
+    """Where a spatial platform label came from: 'title', 'abstract' or ''."""
+    if not platform or platform == UNSPECIFIED_SPATIAL or platform in SC_PLATFORM_NAMES:
+        return ""
+    named, _ = detect_platform(title, "")
+    return "title" if named == platform else "abstract"
+
+
+def platform_class_of(platform):
+    if platform in IMAGING_NAMES:
+        return "imaging"
+    return "unspecified" if platform == UNSPECIFIED_SPATIAL else "sequencing"
 
 
 # Organ-specific subtypes. A breast-cancer study whose abstract mentions lung
@@ -713,6 +749,7 @@ def classify(title, body, extra=""):
     return {
         "platform": platform,
         "platform_class": platform_class,
+        "platform_source": platform_source(title, platform),
         "sc_platform": first_match(SC_PLATFORM, text) if has_sc else None,
         "has_sc": has_sc,
         "disease": cancer or other or "Unspecified",
@@ -759,11 +796,13 @@ def apply_title_assay(row, assay):
         elif row["platform"] not in SC_PLATFORM_NAMES:
             row["platform"] = row.get("sc_platform") or "scRNA-seq (unspecified)"
         row["platform_class"] = "sequencing"
+        row["platform_source"] = ""
     elif assay == "spatial":
         row["modality"] = "spatial"
         if row["platform"] in SC_PLATFORM_NAMES:
             row["platform"] = UNSPECIFIED_SPATIAL
             row["platform_class"] = "unspecified"
+            row["platform_source"] = ""
     return True
 
 
@@ -1011,6 +1050,250 @@ def link_siblings(rows):
     return edges
 
 
+# --------------------------------------------------------------------------
+# Enrichment: what a series actually deposited
+# --------------------------------------------------------------------------
+# A study abstract names every platform the study used, and a third of spatial
+# records name none at all. The files a series deposited (tissue_positions.csv,
+# a Xenium transcripts.parquet, a GeoMx .dcc) and its processing text
+# ("Space Ranger", "AtoMx") say what that one series holds. ArrayExpress also
+# curates a study type, organism and sample count per study.
+#
+# Each accession is fetched once and cached in data/enrichment.json; bump
+# ENRICH_VERSION when EVIDENCE changes so everything is fetched again. The
+# fetch has a time budget: what does not fit is picked up on the next run.
+ENRICH_VERSION = 1
+ENRICH_PATH = DATA / "enrichment.json"
+ENRICH_BUDGET_S = float(os.environ.get("ENRICH_BUDGET_S", "2400"))
+ENRICH_WORKERS = 2
+ENRICH_PAUSE = 0.6
+GEO_ACC = "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi"
+BIOSTUDIES_API = "https://www.ebi.ac.uk/biostudies/api/v1/"
+
+# Signatures in deposited file names and processing/protocol text. Checked on
+# a sample of catalogued records against their known platform before use.
+EVIDENCE = _c(
+    [
+        ("Visium HD", r"square_\d{3}um|binned_outputs|visium[ _-]?hd|tissue_positions\.parquet"),
+        ("Xenium", r"xenium|transcripts\.parquet|cells\.parquet|morphology_focus|cell_feature_matrix\.(h5|zarr)"),
+        ("CosMx", r"cosmx|atomx|exprmat_file|_tx_file|fov_positions|spatial molecular imager"),
+        ("MERFISH / MERSCOPE", r"merscope|merfish|vizgen|cell_by_gene|detected_transcripts"),
+        ("GeoMx DSP", r"geomx|\.dcc\b|\.pkc\b|labworksheet|digital spatial profil"),
+        ("Stereo-seq", r"stereo-?seq|stomics|\.gef\b|\.gem(\.gz)?\b"),
+        ("Slide-seq", r"slide-?seq|bead_?locations|\bpuck"),
+        ("Slide-tags", r"slide-?tags"),
+        ("DBiT-seq", r"\bdbit"),
+        ("Curio Seeker", r"curio"),
+        ("Molecular Cartography", r"molecular cartography|resolve bioscience"),
+        ("Tomo-seq", r"tomo-?seq"),
+        ("ST arrays (legacy)", r"_stdata\.tsv|st_pipeline|stpipeline"),
+        ("Visium", r"visium|space ?ranger|tissue_positions|scalefactors_json|tissue_(hires|lowres)_image|[-_]spatial\.tar"),
+    ]
+)
+SOFT_FILE = re.compile(r"^!(?:Series|Sample)_supplementary_file\w*\s*=\s*(\S+)")
+SOFT_TEXT = re.compile(
+    r"^!(?:Series_overall_design|Sample_(?:title|description|data_processing|extract_protocol\w*))\s*="
+)
+
+
+def evidence_hits(texts):
+    return [name for name, rx in EVIDENCE if any(rx.search(t) for t in texts)]
+
+
+def decide_platform(file_hits, text_hits):
+    """One platform from the evidence, or None when it is absent or conflicting."""
+    seen = set(file_hits) | set(text_hits)
+    if "Visium HD" in seen and seen <= {"Visium", "Visium HD"}:
+        return "Visium HD"  # HD deposits carry Visium-style files too
+    if len(file_hits) == 1:
+        return file_hits[0]
+    if not file_hits and len(text_hits) == 1:
+        return text_hits[0]
+    common = set(file_hits) & set(text_hits)
+    return common.pop() if len(common) == 1 else None
+
+
+def _soft_parts(txt):
+    files, text = [], []
+    for line in (txt or "").splitlines():
+        m = SOFT_FILE.match(line)
+        if m:
+            name = m.group(1).rsplit("/", 1)[-1].lower()
+            if name and name != "none":
+                files.append(name)
+        elif SOFT_TEXT.match(line):
+            text.append(line.split("=", 1)[-1].lower())
+    return files, text
+
+
+def geo_evidence(acc):
+    """File names and processing text of a GEO series and its samples."""
+    def soft(targ):
+        txt = _request_text(f"{GEO_ACC}?acc={acc}&targ={targ}&form=text&view=brief")
+        time.sleep(ENRICH_PAUSE)
+        return txt
+
+    txt = soft("self")
+    if txt is None:
+        return None
+    files, text = _soft_parts(txt)
+    if not decide_platform(evidence_hits(files), evidence_hits(text)):
+        samples = soft("gsm")
+        if samples is None:
+            return None
+        more_files, more_text = _soft_parts(samples)
+        files, text = files + more_files, text + more_text
+    return {"v": ENRICH_VERSION, "f": evidence_hits(files), "t": evidence_hits(text)}
+
+
+def _walk_sections(node, visit, depth=0):
+    if depth > 6 or not node:
+        return
+    if isinstance(node, list):
+        for x in node:
+            _walk_sections(x, visit, depth + 1)
+        return
+    if isinstance(node, dict):
+        visit(node)
+        _walk_sections(node.get("subsections"), visit, depth + 1)
+
+
+def ae_evidence(acc):
+    """BioStudies study metadata (study type, organism, sample count, protocols) and file names."""
+    study = _request(BIOSTUDIES_API + "studies/" + acc)
+    time.sleep(ENRICH_PAUSE)
+    if not study:
+        return None
+    out = {"v": ENRICH_VERSION, "st": [], "org": [], "n": 0}
+    protocols = []
+
+    def visit(sec):
+        kind = sec.get("type", "")
+        for a in sec.get("attributes") or []:
+            name, value = a.get("name", ""), str(a.get("value", ""))
+            if kind == "Study" and name == "Study type":
+                out["st"].append(value)
+            elif kind == "Study" and name == "Organism":
+                out["org"].append(value)
+            elif kind == "Samples" and name == "Sample count":
+                try:
+                    out["n"] = int(value)
+                except ValueError:
+                    pass
+            elif kind == "Protocols" and name in ("Description", "Hardware"):
+                protocols.append(value.lower())
+
+    _walk_sections(study.get("section"), visit)
+    listing = _request(BIOSTUDIES_API + "files/" + acc + "?start=0&length=500") or {}
+    time.sleep(ENRICH_PAUSE)
+    names = [str(d.get("path", "")).rsplit("/", 1)[-1].lower() for d in listing.get("data") or []]
+    out["f"], out["t"] = evidence_hits(names), evidence_hits(protocols)
+    return out
+
+
+def needs_evidence(row):
+    if row["db"] == "ArrayExpress":
+        return True
+    if title_assay(row["title"]) not in (None, "spatial"):
+        return False  # a tagged single-cell/bulk subseries: its tag already decides
+    return row["modality"] in ("spatial", "paired") and row.get("platform_source") != "title"
+
+
+def apply_evidence(row, ev):
+    """Use cached evidence on a record. False = the source says it holds no transcriptome."""
+    if row["db"] == "ArrayExpress":
+        if ev.get("org"):
+            row["organism"] = organism("; ".join(ev["org"]))
+        if ev.get("n"):
+            row["samples"] = ev["n"]
+        types = " ; ".join(ev.get("st") or []).lower()
+        if types:
+            spatial = "spatial" in types
+            single = bool(re.search(r"single[- ]?(cell|nucle)", types))
+            if re.search(r"atac|chip-?seq|methyl|bisulfite", types) and not spatial \
+                    and not re.search(r"rna|transcript", types):
+                return False
+            # the curated study type says what this one study holds
+            if spatial and single:
+                row["modality"] = "paired"
+            elif spatial:
+                row["modality"] = "spatial"
+                if row["platform"] in SC_PLATFORM_NAMES:
+                    row["platform"], row["platform_class"], row["platform_source"] = UNSPECIFIED_SPATIAL, "unspecified", ""
+            elif single:
+                row["modality"] = "singlecell"
+                if row["platform"] not in SC_PLATFORM_NAMES:
+                    row["platform"] = row.get("sc_platform") or "scRNA-seq (unspecified)"
+                    row["platform_class"], row["platform_source"] = "sequencing", ""
+    if row["modality"] in ("spatial", "paired") and row.get("platform_source") != "title":
+        found = decide_platform(ev.get("f") or [], ev.get("t") or [])
+        if found:
+            row["platform"], row["platform_class"] = found, platform_class_of(found)
+            row["platform_source"] = "files" if found in (ev.get("f") or []) else "protocol"
+    return True
+
+
+def load_enrichment():
+    try:
+        doc = json.loads(ENRICH_PATH.read_text())
+        if doc.get("version") == ENRICH_VERSION:
+            return doc.get("records", {})
+    except Exception:  # noqa: BLE001 - no cache yet, or an unreadable one
+        pass
+    return {}
+
+
+def save_enrichment(cache):
+    ENRICH_PATH.write_text(
+        json.dumps({"version": ENRICH_VERSION, "records": dict(sorted(cache.items()))},
+                   separators=(",", ":"))
+    )
+
+
+def enrich(rows, fetch=True):
+    """Fetch missing evidence (within the time budget) and apply all cached evidence."""
+    cache = load_enrichment()
+    todo = [r for r in rows if needs_evidence(r) and r["accession"] not in cache]
+    if fetch and todo:
+        deadline = time.time() + ENRICH_BUDGET_S
+        print(f"enrichment: fetching {len(todo)} records "
+              f"({sum(1 for r in todo if r['db'] == 'GEO')} GEO)", flush=True)
+
+        def work(r):
+            if time.time() > deadline:
+                return r["accession"], None
+            fn = ae_evidence if r["db"] == "ArrayExpress" else geo_evidence
+            try:
+                return r["accession"], fn(r["accession"])
+            except Exception as exc:  # noqa: BLE001 - one bad record must not stop the run
+                print(f"  ! enrichment failed for {r['accession']}: {exc}", file=sys.stderr)
+                return r["accession"], None
+
+        with ThreadPoolExecutor(ENRICH_WORKERS) as pool:
+            for i, (acc, ev) in enumerate(pool.map(work, todo), 1):
+                if ev:
+                    cache[acc] = ev
+                if i % 200 == 0:
+                    print(f"  enrichment {i}/{len(todo)}", flush=True)
+        missing = sum(1 for r in todo if r["accession"] not in cache)
+        if missing:
+            print(f"  {missing} records left for the next run (budget or network)", flush=True)
+        save_enrichment(cache)
+
+    kept, dropped, changed = [], 0, 0
+    for r in rows:
+        ev = cache.get(r["accession"]) if needs_evidence(r) else None
+        if ev:
+            before = (r["platform"], r["modality"])
+            if apply_evidence(r, ev) is False:
+                dropped += 1
+                continue
+            changed += before != (r["platform"], r["modality"])
+        kept.append(r)
+    print(f"enrichment: {changed} records relabelled, {dropped} dropped", flush=True)
+    return kept
+
+
 def geo_url(acc):
     return f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={acc}"
 
@@ -1049,6 +1332,7 @@ def build():
                 "modality": "paired" if c["has_sc"] else "spatial",
                 "platform": c["platform"],
                 "platform_class": c["platform_class"],
+                "platform_source": c["platform_source"],
                 "sc_platform": c["sc_platform"],
                 "disease": c["disease"],
                 "disease_group": c["disease_group"],
@@ -1096,6 +1380,7 @@ def build():
                 ),
                 "platform": c["platform"] or c["sc_platform"] or "scRNA-seq (unspecified)",
                 "platform_class": c["platform_class"] or "sequencing",
+                "platform_source": c["platform_source"],
                 "sc_platform": c["sc_platform"],
                 "disease": c["disease"],
                 "disease_group": c["disease_group"],
@@ -1148,6 +1433,7 @@ def build():
                 ),
                 "platform": c["platform"] or c["sc_platform"] or "scRNA-seq (unspecified)",
                 "platform_class": c["platform_class"] or "sequencing",
+                "platform_source": c["platform_source"],
                 "sc_platform": c["sc_platform"],
                 "disease": c["disease"],
                 "disease_group": c["disease_group"],
@@ -1166,7 +1452,9 @@ def build():
             }
         )
 
-    rows, dropped, promoted = finalize(rows, link_siblings(rows))
+    edges = link_siblings(rows)
+    rows = enrich(rows)
+    rows, dropped, promoted = finalize(rows, edges)
     print(f"title assay tags: dropped {dropped} non-spatial, non-single-cell subseries", flush=True)
     print(f"\nsubseries pairing: {promoted} records promoted to paired via a sibling series", flush=True)
 
@@ -1188,6 +1476,7 @@ def summarise(rows):
         "records_with_siblings": sum(1 for r in rows if r.get("siblings")),
         "by_modality": tally("modality"),
         "by_platform_class": tally("platform_class"),
+        "by_platform_source": tally("platform_source"),
         "by_disease_group": tally("disease_group"),
         "by_study_type": tally("study_type"),
         "by_database": tally("db"),
@@ -1195,6 +1484,7 @@ def summarise(rows):
         "sources": [
             "NCBI GEO (E-utilities esearch/esummary, db=gds)",
             "EBI ArrayExpress (BioStudies search API)",
+            "GEO series/sample records and BioStudies study files (platform evidence)",
         ],
     }
 
@@ -1230,13 +1520,16 @@ def reclassify(rows):
         r["tissue"] = tissue_for(r["tissue"], r["disease"])
         r["subtypes"] = compatible_subtypes(r["subtypes"], r["disease"])
         r["date"] = (r["date"] or "").replace("/", "-")
+        if "platform_source" not in r:
+            r["platform_source"] = platform_source(r["title"], r["platform"])
         # a platform named in the record's own title wins over the abstract's
         if r["platform"] not in SC_PLATFORM_NAMES:
             named, cls = detect_platform(r["title"], "")
             if named and named != UNSPECIFIED_SPATIAL:
-                r["platform"], r["platform_class"] = named, cls
+                r["platform"], r["platform_class"], r["platform_source"] = named, cls, "title"
         if r["platform"] == UNSPECIFIED_SPATIAL:
-            r["platform_class"] = "unspecified"
+            r["platform_class"], r["platform_source"] = "unspecified", ""
+    rows = enrich(rows, fetch="--fetch" in sys.argv)
     edges += geo_title_links(rows)
     edges += ae_title_links(rows)
     kept, dropped, promoted = finalize(rows, edges)
