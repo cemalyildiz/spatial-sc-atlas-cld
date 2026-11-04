@@ -201,6 +201,7 @@ a { color: var(--accent-ink); }
 }
 
 .fgroup { border-top: 1px solid var(--border); padding: 10px 0; }
+.fnote { margin: 6px 0 0; font-size: 11px; line-height: 1.45; color: var(--text-muted); }
 .fgroup:first-child { border-top: 0; padding-top: 0; }
 
 .fgroup > summary {

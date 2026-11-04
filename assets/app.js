@@ -37,6 +37,13 @@
   };
   var MODALITY_SHORT = { paired: 'Paired', spatial: 'Spatial', singlecell: 'Single-cell' };
   var CLASS_LABEL = { imaging: 'Imaging-based', sequencing: 'Sequencing-based', unspecified: 'Not stated' };
+  // where the platform label of a spatial record came from, strongest first
+  var SOURCE_LABEL = {
+    title: "Named in the record's own title",
+    files: 'Read from the deposited file names',
+    protocol: 'Read from the processing / protocol text',
+    abstract: 'Named in the study abstract'
+  };
 
   var GROUPS = [
     { key: 'modality',       title: 'Modality',           open: true,  label: function (v) { return MODALITY_LABEL[v] || v; } },
@@ -437,6 +444,10 @@
       cwrap.appendChild(lab);
     });
     dc.appendChild(cwrap);
+    // a cell count is only known where the record states one, so say how many do
+    var stated = DATA.filter(function (r) { return r.cells > 0; }).length;
+    dc.appendChild(el('p', 'fnote', 'Only ' + nf(stated) + ' of ' + nf(DATA.length) +
+      ' records state a cell count; any minimum hides the rest.'));
     host.appendChild(dc);
 
     refreshFacets();
@@ -565,6 +576,7 @@
     }
     row('Modality', MODALITY_LABEL[r.modality] || r.modality);
     row('Platform', r.platform + (r.platform_class ? ' · ' + CLASS_LABEL[r.platform_class] : ''));
+    if (r.platform_source && SOURCE_LABEL[r.platform_source]) row('Platform evidence', SOURCE_LABEL[r.platform_source]);
     if (r.sc_platform && r.modality !== 'singlecell') row('Single-cell assay', r.sc_platform);
     row('Disease', r.disease + (r.disease_group !== 'Unspecified' ? ' (' + r.disease_group + ')' : ''));
     if (r.subtypes && r.subtypes.length) row('Subtype', r.subtypes.join(' · '));
@@ -682,6 +694,7 @@
       ['Modality', function (r) { return MODALITY_LABEL[r.modality] || r.modality; }],
       ['Platform', function (r) { return r.platform; }],
       ['Production method', function (r) { return CLASS_LABEL[r.platform_class] || '—'; }],
+      ['Platform evidence', function (r) { return SOURCE_LABEL[r.platform_source] || '—'; }],
       ['Disease', function (r) { return r.disease; }],
       ['Subtype', function (r) { return (r.subtypes || []).join(' · ') || '\u2014'; }],
       ['Study type', function (r) { return r.study_type || '\u2014'; }],
@@ -955,7 +968,7 @@
   }
 
   function exportCsv() {
-    var cols = ['accession', 'db', 'title', 'modality', 'platform', 'platform_class',
+    var cols = ['accession', 'db', 'title', 'modality', 'platform', 'platform_class', 'platform_source',
                 'sc_platform', 'pairing', 'siblings', 'disease', 'disease_group', 'subtypes', 'study_type',
                 'tissue', 'organism',
                 'samples', 'cells', 'year', 'date', 'pmid', 'access', 'url'];
