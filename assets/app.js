@@ -20,6 +20,7 @@
     disease_group: new Set(),
     disease: new Set(),
     subtypes: new Set(),
+    study_type: new Set(),
     tissue: new Set(),
     organism: new Set(),
     db: new Set(),
@@ -43,6 +44,7 @@
     { key: 'disease_group',  title: 'Disease group',      open: true },
     { key: 'disease',        title: 'Disease / cancer type', open: true },
     { key: 'subtypes',       title: 'Subtype', multi: true },
+    { key: 'study_type',     title: 'Study type' },
     { key: 'platform',       title: 'Platform' },
     { key: 'tissue',         title: 'Tissue / organ' },
     { key: 'organism',       title: 'Organism' },
@@ -228,6 +230,11 @@
       var sib = el('span', 'sib-chip', '+' + r.siblings.length + ' series');
       sib.title = 'Same study, other series: ' + r.siblings.join(', ');
       top.appendChild(sib);
+    }
+    if (r.study_type === 'Method / tool development') {
+      var mc = el('span', 'method-chip', 'Method');
+      mc.title = 'Method / tool development study — the data are often a demonstration set';
+      top.appendChild(mc);
     }
     (r.subtypes || []).slice(0, 3).forEach(function (s) {
       var chip = el('span', 'sub-chip', s);
@@ -490,7 +497,7 @@
 
   // ------------------------------------------------------------ URL state --
   var URL_KEYS = { modality: 'm', platform_class: 'pc', platform: 'p', disease_group: 'dg',
-                   disease: 'd', subtypes: 'st', tissue: 't', organism: 'o', db: 'db', access: 'ac' };
+                   disease: 'd', subtypes: 'st', study_type: 'sy', tissue: 't', organism: 'o', db: 'db', access: 'ac' };
 
   function writeURL() {
     var p = new URLSearchParams();
@@ -556,6 +563,7 @@
     if (r.sc_platform && r.modality !== 'singlecell') row('Single-cell assay', r.sc_platform);
     row('Disease', r.disease + (r.disease_group !== 'Unspecified' ? ' (' + r.disease_group + ')' : ''));
     if (r.subtypes && r.subtypes.length) row('Subtype', r.subtypes.join(' · '));
+    row('Study type', r.study_type);
     if (r.siblings && r.siblings.length) {
       dl.appendChild(el('dt', null, 'Other series'));
       var dd = el('dd');
@@ -574,8 +582,8 @@
       });
       dd.appendChild(el('div', 'dd-note',
         r.pairing === 'series'
-          ? 'Same study, split across GEO series — this record is counted as paired because of them.'
-          : 'Same study, split across GEO series.'));
+          ? 'Same study, split across ' + r.db + ' series — this record is counted as paired because of them.'
+          : 'Same study, split across ' + r.db + ' series.'));
       dl.appendChild(dd);
     }
     row('Tissue / organ', r.tissue);
@@ -671,6 +679,7 @@
       ['Production method', function (r) { return CLASS_LABEL[r.platform_class] || '—'; }],
       ['Disease', function (r) { return r.disease; }],
       ['Subtype', function (r) { return (r.subtypes || []).join(' · ') || '\u2014'; }],
+      ['Study type', function (r) { return r.study_type || '\u2014'; }],
       ['Other series', function (r) { return (r.siblings || []).join(' · ') || '\u2014'; }],
       ['Tissue', function (r) { return r.tissue; }],
       ['Organism', function (r) { return r.organism; }],

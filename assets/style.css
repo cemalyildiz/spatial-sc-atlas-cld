@@ -339,6 +339,12 @@ a { color: var(--accent-ink); }
   background: transparent; white-space: nowrap;
 }
 
+.method-chip {
+  font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 20px;
+  color: var(--text-muted); border: 1px dashed var(--border-strong);
+  background: transparent; white-space: nowrap;
+}
+
 .tech { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 5px; white-space: nowrap; }
 .tech-imaging    { background: var(--imaging-bg); color: var(--imaging-fg); }
 .tech-sequencing { background: var(--seq-bg); color: var(--seq-fg); }
