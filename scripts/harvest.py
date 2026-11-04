@@ -1256,6 +1256,10 @@ def enrich(rows, fetch=True):
     """Fetch missing evidence (within the time budget) and apply all cached evidence."""
     cache = load_enrichment()
     todo = [r for r in rows if needs_evidence(r) and r["accession"] not in cache]
+    # Most useful first, in case the budget runs out: ArrayExpress (few, and its
+    # study type, organism and sample count fix whole records), then spatial
+    # records with no platform at all, then those labelled from the abstract.
+    todo.sort(key=lambda r: (r["db"] != "ArrayExpress", r["platform"] != UNSPECIFIED_SPATIAL))
     if fetch and todo:
         deadline = time.time() + ENRICH_BUDGET_S
         print(f"enrichment: fetching {len(todo)} records "
