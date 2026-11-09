@@ -1,40 +1,40 @@
 {
-  "generated": "2026-11-04 12:08 UTC",
-  "total": 4564,
+  "generated": "2026-11-09 12:53 UTC",
+  "total": 4581,
   "paired_via_siblings": 368,
-  "records_with_siblings": 1134,
+  "records_with_siblings": 1138,
   "by_modality": {
-    "singlecell": 2281,
-    "spatial": 1467,
-    "paired": 816
+    "singlecell": 2286,
+    "spatial": 1476,
+    "paired": 819
   },
   "by_platform_class": {
-    "sequencing": 3787,
-    "imaging": 404,
-    "unspecified": 373
+    "sequencing": 3800,
+    "imaging": 406,
+    "unspecified": 375
   },
   "by_platform_source": {
-    "Unspecified": 2830,
-    "protocol": 745,
-    "files": 477,
-    "title": 442,
-    "abstract": 70
+    "Unspecified": 2837,
+    "protocol": 751,
+    "files": 478,
+    "title": 444,
+    "abstract": 71
   },
   "by_disease_group": {
-    "Cancer": 3162,
-    "Other disease": 843,
-    "Unspecified": 559
+    "Cancer": 3173,
+    "Other disease": 847,
+    "Unspecified": 561
   },
   "by_study_type": {
-    "Biological study": 4525,
-    "Method / tool development": 39
+    "Biological study": 4541,
+    "Method / tool development": 40
   },
   "by_database": {
-    "GEO": 4386,
+    "GEO": 4403,
     "ArrayExpress": 178
   },
   "by_year": {
-    "2026": 1215,
+    "2026": 1232,
     "2025": 1028,
     "2024": 747,
     "2023": 527,
@@ -55,5 +55,5 @@
     "EBI ArrayExpress (BioStudies search API)",
     "GEO series/sample records and BioStudies study files (platform evidence)"
   ],
-  "new_since_last_run": 0
+  "new_since_last_run": 17
 }
